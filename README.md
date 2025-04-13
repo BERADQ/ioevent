@@ -7,7 +7,6 @@ A lightweight Rust crate built on Tokio's async runtime, providing a flexible ev
 ## Features ✨
 - 🚀 Event-driven Architecture: Convert async I/O operations into unified event streams
 - 🔗 Tokio-powered: Seamless integration with Tokio's async ecosystem
-- 📦 Lightweight: Minimal boilerplate and lean dependency tree
 - 🧩 Extensible: Custom event types and handler registration
 - 🔄 Bi-directional Communication: Support both event emission and response handling
 
