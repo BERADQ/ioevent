@@ -1,0 +1,28 @@
+[package]
+name = "ioevent"
+version = "0.1.0"
+edition.workspace = true
+
+[features]
+macros = ["ioevent_macro"]
+default = ["macros"]
+
+[dependencies]
+
+# Internal dependencies
+
+ioevent_macro = { workspace = true, optional = true }
+
+# External dependencies
+
+serde = { version = "1.0.216", features = ["derive", "serde_derive"] }
+channels = { version = "0.13.0", features = [
+    "tokio",
+    "cbor",
+    "std",
+], default-features = false }
+tokio = { version = "1.44.2", features = ["full"] }
+ciborium = "0.2.2"
+futures-util = "0.3.31"
+thiserror = "2.0.12"
+futures = "0.3.31"
