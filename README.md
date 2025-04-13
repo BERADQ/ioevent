@@ -13,7 +13,50 @@ A lightweight Rust crate built on Tokio's async runtime, providing a flexible ev
 
 ## Usage 🚀
 
-**See The Examples**
+**See The [Examples](https://github.com/BERADQ/ioevent/tree/main/examples)**
+
+**Define Events**
+```rust
+#[derive(Deserialize, Serialize, Debug, Event)]
+struct EventA {
+    foo: String,
+    bar: i64,
+}
+
+#[derive(Deserialize, Serialize, Debug, Event)]
+struct EventB {
+    foo: i64,
+    bar: String,
+}
+```
+
+**Collect Subscribers**
+```rust
+static SUBSCRIBERS: &[Subscriber<()>] = &[
+    create_subscriber!(echo)
+];
+
+#[subscriber]
+async fn echo(s: State<()>, e: EventA) -> Result {
+    s.bus.emit(&EventB {
+        foo: e.bar,
+        bar: e.foo,
+    })?;
+    Ok(())
+}
+```
+
+**Create a Bus**
+```rust
+let subscribes = Subscribers::init(SUBSCRIBERS);
+let mut builder = BusBuilder::new(subscribes);
+builder.add_pair(IoPair::stdio());
+let Bus {
+    mut subscribe_ticker,
+    mut effect_ticker,
+    effect_wright,
+} = builder.build();
+```
 
 ## todo
 - [ ] middleware support
