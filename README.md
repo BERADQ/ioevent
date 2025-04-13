@@ -58,6 +58,21 @@ let Bus {
 } = builder.build();
 ```
 
+**Create a State**
+```rust
+let state = State::new((), effect_wright.clone());
+```
+
+**Tick the Bus**
+```rust
+loop {
+    select! {
+        _ = subscribe_ticker.tick(&state) => {},
+        _ = effect_ticker.tick() => {},
+    }
+}
+```
+
 ## todo
 - [ ] middleware support
 - [ ] custom serializer & deserializer
