@@ -4,7 +4,7 @@
 ![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/BERADQ/ioevent)
 ![Crates.io Version](https://img.shields.io/crates/v/ioevent)
 
-**Transform Any Async I/O into Event-Driven Architecture with Low Overhead.**
+**Transform Any tokio Async I/O into Event-Driven Architecture with Low Overhead.**
 
 A lightweight Rust crate built on Tokio's async runtime, providing a flexible event bus abstraction for asynchronous I/O operations. Perfect for building decoupled, event-driven systems with optimized performance.
 
@@ -20,7 +20,7 @@ A lightweight Rust crate built on Tokio's async runtime, providing a flexible ev
 
 **Define Events**
 ```rust
-#[derive(Deserialize, Serialize, Debug, Event)]
+#[derive(Deserialize, Serialize, Event)]
 struct EventA {
     foo: String,
     bar: i64,
@@ -33,10 +33,11 @@ struct EventB {
 }
 ```
 
-**Collect Subscribers**
+**Create & Collect Subscribers**
 ```rust
 static SUBSCRIBERS: &[Subscriber<()>] = &[
-    create_subscriber!(echo)
+    create_subscriber!(echo),
+    create_subscriber!(print_b)
 ];
 
 #[subscriber]
@@ -47,6 +48,15 @@ async fn echo<T>(s: State<T>, e: EventA) -> Result {
     })?;
     Ok(())
 }
+// outher side: without state or ret
+#[subscriber]
+async fn print_b(e: EventB) {
+    println!("{:?}", e);
+}
+// custom event query
+// ... see example
+// merge event and state
+// ... see example
 ```
 
 **Create a Bus**
