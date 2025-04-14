@@ -84,6 +84,7 @@ loop {
         _ = effect_ticker.tick() => {},
     }
 }
+// ... and effect see example
 ```
 
 ## todo
