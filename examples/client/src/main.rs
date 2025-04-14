@@ -1,13 +1,14 @@
 use ioevent::{
-    bus::{state::State, Bus, BusBuilder, IoPair},
+    bus::{Bus, BusBuilder, IoPair, state::State},
     create_subscriber,
     event::{Event, Subscriber, Subscribers},
-    subscriber
+    subscriber,
 };
 use serde::{Deserialize, Serialize};
 use tokio::select;
 
-static SUBSCRIBERS: &[Subscriber<MyState>] = &[create_subscriber!(echo)];
+static SUBSCRIBERS: &[Subscriber<MyState>] =
+    &[create_subscriber!(echo), create_subscriber!(echo_c)];
 
 #[derive(Clone)]
 struct MyState;
@@ -25,11 +26,21 @@ struct B {
     bar: String,
 }
 
+#[derive(Deserialize, Serialize, Debug, Event)]
+#[event(tag = "com::demo::my::C")]
+struct C(String, i64);
+
 #[subscriber]
 async fn echo(s: State<MyState>, e: A) -> Result {
-    s.bus.emit(&B {
-        foo: e.bar,
-        bar: e.foo,
+    s.bus.emit(&C(e.foo, e.bar))?;
+    Ok(())
+}
+
+#[subscriber]
+async fn echo_c<T: Clone>(state: State<T>, event: C) -> Result {
+    state.bus.emit(&B {
+        foo: event.1,
+        bar: event.0,
     })?;
     Ok(())
 }

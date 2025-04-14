@@ -25,6 +25,10 @@ pub struct B {
     foo: i64,
     bar: String,
 }
+#[derive(Deserialize, Serialize, Debug, Event)]
+#[event(tag = "com::demo::my::C")]
+struct C(String, i64);
+
 #[subscriber]
 async fn show_b(event: B) {
     println!("{:?}", event);

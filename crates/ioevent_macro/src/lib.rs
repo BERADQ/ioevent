@@ -95,19 +95,21 @@ pub fn subscriber(_attr: TokenStream, item: TokenStream) -> TokenStream {
         FnArg::Typed(pat_type) => (&pat_type.ty, &pat_type.pat),
         _ => panic!("State parameter must be a typed parameter"),
     });
+    
+    let raw_generics = &original_fn.sig.generics.type_params().map(|v|v.clone()).collect::<Vec<_>>();
 
     let (generics, new_params) = if let Some((state_ty, state_name)) = state_ty_name {
         let params = quote! {
             #state_name: &#state_ty,
             #event_name: &::ioevent::event::EventData
         };
-        (quote! {}, params)
+        (quote! { <#(#raw_generics),*> }, params)
     } else {
         let params = quote! {
-            _state: &::ioevent::bus::state::State<T>,
+            _state: &::ioevent::bus::state::State<_STATE>,
             #event_name: &::ioevent::event::EventData
         };
-        (quote! { <T> }, params)
+        (quote! { <#(#raw_generics),* _STATE> }, params)
     };
 
     let event_try_into = quote! {
@@ -143,14 +145,14 @@ pub fn subscriber(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mod_name = format_ident!("{}", func_name);
 
     let mod_block = quote! {
-        mod #mod_name {
+        #[doc(hidden)]
+        pub mod #mod_name {
             use super::*;
             pub type _Event = #event_ty;
         }
     };
 
     let expanded = quote! {
-        #[allow(non_camel_case_types)]
         fn #func_name #generics (#new_params) -> ::ioevent::future::SubscribeFutureRet {
             #event_try_into
             #state_clone
