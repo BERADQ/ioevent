@@ -51,6 +51,7 @@ async fn echo<T>(s: State<T>, e: EventA) -> Result {
 // outher side: without state or ret
 #[subscriber]
 async fn print_b(e: EventB) {
+    // by default, the host does not receive events sent by itself
     println!("{:?}", e);
 }
 // custom event query
