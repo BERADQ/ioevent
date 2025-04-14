@@ -40,7 +40,7 @@ static SUBSCRIBERS: &[Subscriber<()>] = &[
 ];
 
 #[subscriber]
-async fn echo(s: State<()>, e: EventA) -> Result {
+async fn echo<T>(s: State<T>, e: EventA) -> Result {
     s.bus.emit(&EventB {
         foo: e.bar,
         bar: e.foo,
