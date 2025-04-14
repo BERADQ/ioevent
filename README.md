@@ -1,11 +1,12 @@
 # `IOEVENT`
 
 [![GitHub License](https://img.shields.io/github/license/BERADQ/ioevent)](https://github.com/BERADQ/ioevent/blob/main/LICENSE)
-![Crates.io Version](https://img.shields.io/crates/v/ioevent)
 ![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/BERADQ/ioevent)
-[![Static Badge](https://img.shields.io/badge/QQ-948180922-blue)](https://qm.qq.com/q/MhcpzSXvi2)
+![Crates.io Version](https://img.shields.io/crates/v/ioevent)
 
 **Transform Any Async I/O into Event-Driven Architecture with Low Overhead**
+
+----
 
 A lightweight Rust crate built on Tokio's async runtime, providing a flexible event bus abstraction for asynchronous I/O operations. Perfect for building decoupled, event-driven systems with optimized performance.
 
