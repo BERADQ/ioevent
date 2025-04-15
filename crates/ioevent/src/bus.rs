@@ -3,14 +3,14 @@ use channels::{
     serdes::Cbor,
 };
 use futures::future::{self, join_all};
+use serde::{Deserialize, Serialize};
 use state::State;
 use tokio::task;
 
 use crate::{
-    error::{BusRecvError, BusSendError, CallSubscribeError},
+    error::{BusRecvError, BusSendError, CallSubscribeError, TryFromEventError},
     event::*,
 };
-
 
 /// Ticker for subscribing to events.
 pub struct SubscribeTicker<T: 'static, R> {
@@ -30,7 +30,7 @@ where
     /// , the iterator will be empty.
     ///
     /// If all subscribers failed to receive an event, the error is returned in `Err`.
-    /// 
+    ///
     /// This method is `Cancel Safety`.
     pub async fn tick(
         &mut self,
@@ -60,11 +60,11 @@ where
     W: AsyncWrite + Unpin,
 {
     /// Receive one event from effect channel and emit it to all subscribers.
-    /// 
+    ///
     /// The returned iterator is an iterator over errors that
     /// occurred while emitting events to subscribers. If any receiver returned `Ok`
     /// , the iterator will be empty.
-    /// 
+    ///
     /// This method is `Cancel Safety`.
     pub async fn tick(&mut self) -> impl Iterator<Item = BusSendError<W::Error>> {
         let event = self.state_rx.recv().await;
@@ -241,8 +241,69 @@ where
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProcedureCallData {
+    pub echo: u64,
+    pub data: ciborium::Value,
+}
+impl Event for ProcedureCallData {
+    const TAG: &'static str = "#ProcedureCallData::";
+    const SELECTOR: Selector = Selector(|x| x.event.starts_with(Self::TAG));
+    fn upcast(&self) -> Result<EventData, ciborium::value::Error> {
+        Ok(EventData {
+            event: Self::TAG.to_string() + &self.echo.to_string(),
+            data: self.data.clone(),
+        })
+    }
+}
+impl TryFrom<&EventData> for ProcedureCallData {
+    type Error = TryFromEventError;
+    fn try_from(value: &EventData) -> Result<Self, Self::Error> {
+        Ok(ProcedureCallData {
+            echo: value.event.replace(Self::TAG, "").parse().map_err(
+                |e: std::num::ParseIntError| TryFromEventError::InvalidEvent(e.to_string()),
+            )?,
+            data: value.data.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProcedureCallRetData {
+    pub echo: u64,
+    pub data: ciborium::Value,
+}
+impl Event for ProcedureCallRetData {
+    const TAG: &'static str = "#ProcedureCallRetData::";
+    const SELECTOR: Selector = Selector(|x| x.event.starts_with(Self::TAG));
+    fn upcast(&self) -> Result<EventData, ciborium::value::Error> {
+        Ok(EventData {
+            event: Self::TAG.to_string() + &self.echo.to_string(),
+            data: self.data.clone(),
+        })
+    }
+}
+impl TryFrom<&EventData> for ProcedureCallRetData {
+    type Error = TryFromEventError;
+    fn try_from(value: &EventData) -> Result<Self, Self::Error> {
+        Ok(ProcedureCallRetData {
+            echo: value.event.replace(Self::TAG, "").parse().map_err(
+                |e: std::num::ParseIntError| TryFromEventError::InvalidEvent(e.to_string()),
+            )?,
+            data: value.data.clone(),
+        })
+    }
+}
+
 pub mod state {
-    use super::EffectWright;
+    use std::collections::HashMap;
+
+    use rand::{RngCore, rngs::mock::StepRng};
+    use tokio::sync::{Mutex, RwLock, oneshot};
+
+    use crate::{Event, EventData, error::CallSubscribeError, future::SubscribeFutureRet};
+
+    use super::{EffectWright, ProcedureCallData, ProcedureCallRetData};
 
     /// The state of the bus. For collect side effects.
     #[derive(Clone)]
@@ -254,6 +315,126 @@ pub mod state {
         /// Create a new state.
         pub fn new(state: T, bus: EffectWright) -> Self {
             Self { state, bus }
+        }
+    }
+    pub trait ProcedureCall {
+        fn wait(
+            &self,
+            echo: u64,
+        ) -> impl Future<Output = Result<ciborium::Value, CallSubscribeError>>;
+        fn resolve(
+            &self,
+            echo: u64,
+            data: ciborium::Value,
+        ) -> impl Future<Output = Result<(), CallSubscribeError>>;
+        fn try_resolve(
+            &self,
+            echo: u64,
+            data: ciborium::Value,
+        ) -> impl Future<Output = Result<(), CallSubscribeError>>;
+        fn generate_echo(&self) -> impl Future<Output = u64>;
+    }
+
+    pub trait MayProcedureCall {
+        fn get_procedure_call_state(&self) -> &ProcedureCallState;
+    }
+
+    impl<T> ProcedureCall for T
+    where
+        T: MayProcedureCall,
+    {
+        async fn wait(&self, echo: u64) -> Result<ciborium::Value, CallSubscribeError> {
+            let state = self.get_procedure_call_state();
+            let (tx, rx) = oneshot::channel();
+            state.channel_shot.write().await.insert(echo, tx);
+            let result = rx.await.map_err(|_| {
+                CallSubscribeError::ProcedureCall(format!("Procedure call {} failed", echo))
+            })?;
+            Ok(result)
+        }
+        async fn resolve(
+            &self,
+            echo: u64,
+            data: ciborium::Value,
+        ) -> Result<(), CallSubscribeError> {
+            let state = self.get_procedure_call_state();
+            let tx = state.channel_shot.write().await.remove(&echo);
+            if let Some(tx) = tx {
+                tx.send(data).map_err(|_| {
+                    CallSubscribeError::ProcedureCall(format!("Procedure call {} failed", echo))
+                })?;
+                Ok(())
+            } else {
+                Err(CallSubscribeError::ProcedureCall(format!(
+                    "Procedure call {} not found",
+                    echo
+                )))
+            }
+        }
+        async fn try_resolve(
+            &self,
+            echo: u64,
+            data: ciborium::Value,
+        ) -> Result<(), CallSubscribeError> {
+            let state = self.get_procedure_call_state();
+            let tx = state.channel_shot.read().await.contains_key(&echo);
+            if tx {
+                self.resolve(echo, data).await
+            } else {
+                Ok(())
+            }
+        }
+        async fn generate_echo(&self) -> u64 {
+            let mut rand = self.get_procedure_call_state().rand.lock().await;
+            rand.next_u64()
+        }
+    }
+
+    pub trait ProcedureCallExt {
+        fn procedure_call(
+            &self,
+            data: ciborium::Value,
+        ) -> impl Future<Output = Result<ciborium::Value, CallSubscribeError>>;
+    }
+    impl<T> ProcedureCallExt for State<T>
+    where
+        T: ProcedureCall,
+    {
+        async fn procedure_call(
+            &self,
+            data: ciborium::Value,
+        ) -> Result<ciborium::Value, CallSubscribeError> {
+            let echo = self.state.generate_echo().await;
+            let data = ProcedureCallData { echo, data }.upcast()?;
+            let result = self.state.wait(echo).await?;
+            self.bus.emit(&data)?;
+            Ok(result)
+        }
+    }
+    pub fn procedure_ret_subscribe<T>(state: &State<T>, event: &EventData) -> SubscribeFutureRet
+    where
+        T: ProcedureCall + Clone + 'static,
+    {
+        let pcd = ProcedureCallRetData::try_from(event);
+        let state = state.clone();
+        Box::pin(async move {
+            let pcd = pcd?;
+            state.state.resolve(pcd.echo, pcd.data).await?;
+            Ok(())
+        })
+    }
+    #[doc(hidden)]
+    pub mod procedure_ret_subscribe {
+        use crate::bus::ProcedureCallRetData;
+        pub type _Event = ProcedureCallRetData;
+    }
+    pub struct ProcedureCallState {
+        pub rand: Mutex<StepRng>,
+        pub channel_shot: RwLock<HashMap<u64, oneshot::Sender<ciborium::Value>>>,
+    }
+    impl MayProcedureCall for ProcedureCallState {
+        fn get_procedure_call_state(&self) -> &ProcedureCallState {
+            self
         }
     }
 }

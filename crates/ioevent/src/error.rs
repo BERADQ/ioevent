@@ -11,6 +11,8 @@ pub enum TryFromEventError {
     TagError(String, String),
     #[error("?")]
     Infallible,
+    #[error("Invalid event: {0}")]
+    InvalidEvent(String),
 }
 
 #[derive(Debug, Error)]
@@ -21,6 +23,8 @@ pub enum CallSubscribeError {
     SendEvent(tokio::sync::mpsc::error::SendError<EventData>),
     #[error("CallSubscribe error: {0}")]
     Other(String),
+    #[error("Procedure call error: {0}")]
+    ProcedureCall(String),
 }
 impl From<TryFromEventError> for CallSubscribeError {
     fn from(value: TryFromEventError) -> Self {
