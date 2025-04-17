@@ -91,4 +91,4 @@ loop {
 ## todo
 - [ ] middleware support
 - [ ] custom serializer & deserializer
-- [ ] procedure call
+- [x] procedure call
