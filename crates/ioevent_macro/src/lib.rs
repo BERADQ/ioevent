@@ -163,3 +163,182 @@ pub fn subscriber(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+#[proc_macro_derive(ProcedureCall, attributes(procedure))]
+pub fn derive_procedure_call(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+    let name = input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let mut custom_path = None;
+    for attr in &input.attrs {
+        if !attr.path().is_ident("procedure") {
+            continue;
+        }
+
+        let meta_list = match attr.parse_args_with(Punctuated::<syn::Meta, Token![,]>::parse_terminated) {
+            Ok(list) => list,
+            Err(e) => return e.to_compile_error().into(),
+        };
+
+        for meta in meta_list {
+            match meta {
+                syn::Meta::NameValue(nv) if nv.path.is_ident("path") => {
+                    let lit_str = match syn::parse2::<syn::LitStr>(nv.value.clone().into_token_stream()) {
+                        Ok(lit) => lit,
+                        Err(_) => {
+                            let msg = "`path` attribute must be a string literal";
+                            return syn::Error::new_spanned(nv.value, msg)
+                                .to_compile_error()
+                                .into();
+                        }
+                    };
+
+                    if custom_path.is_some() {
+                        let msg = "`path` specified multiple times";
+                        return syn::Error::new_spanned(nv, msg).to_compile_error().into();
+                    }
+
+                    custom_path = Some(lit_str);
+                }
+                _ => {
+                    let msg = "unknown attribute parameter, expected `path = \"...\"`";
+                    return syn::Error::new_spanned(meta, msg).to_compile_error().into();
+                }
+            }
+        }
+    }
+
+    let path_expr = if let Some(lit) = custom_path {
+        quote! { #lit }
+    } else {
+        quote! { concat!(module_path!(), "::", stringify!(#name)) }
+    };
+
+    let expanded = quote! {
+        impl #impl_generics ::ioevent::bus::state::ProcedureCall for #name #ty_generics #where_clause {
+            const PATH: &'static str = #path_expr;
+        }
+
+        impl #impl_generics TryFrom<::ioevent::bus::state::ProcedureCallData> for #name #ty_generics #where_clause {
+            type Error = ::ioevent::error::TryFromEventError;
+            fn try_from(value: ::ioevent::bus::state::ProcedureCallData) -> ::core::result::Result<Self, Self::Error> {
+                ::core::result::Result::Ok(value.data.deserialized()?)
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+#[proc_macro_attribute]
+pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let original_fn = parse_macro_input!(item as ItemFn);
+
+    if original_fn.sig.asyncness.is_none() {
+        return quote! { compile_error!("procedure macro can only be applied to async functions"); }.into();
+    }
+
+    let params = original_fn.sig.inputs.iter().collect::<Vec<_>>();
+    let (state_param, event_param) = match params.len() {
+        1 => (None, params[0]),
+        2 => (Some(params[0]), params[1]),
+        _ => panic!("Expected 1 or 2 parameters"),
+    };
+
+    let (event_ty, event_name) = match event_param {
+        FnArg::Typed(pat_type) => (&pat_type.ty, &pat_type.pat),
+        _ => panic!("Event parameter must be a typed parameter"),
+    };
+
+    let state_ty_name = state_param.map(|param| match param {
+        FnArg::Typed(pat_type) => (&pat_type.ty, &pat_type.pat),
+        _ => panic!("State parameter must be a typed parameter"),
+    });
+    
+    let raw_generics = &original_fn.sig.generics.type_params().map(|v|v.clone()).collect::<Vec<_>>();
+
+    let (generics, new_params) = if let Some((state_ty, state_name)) = state_ty_name {
+        let params = quote! {
+            #state_name: &#state_ty,
+            #event_name: &::ioevent::event::EventData
+        };
+        (quote! { <#(#raw_generics),*> }, params)
+    } else {
+        let params = quote! {
+            _state: &::ioevent::bus::state::State<_STATE>,
+            #event_name: &::ioevent::event::EventData
+        };
+        (quote! { <#(#raw_generics),* _STATE: ::ioevent::bus::state::ProcedureCallWright + ::std::clone::Clone + 'static> }, params)
+    };
+
+    let event_try_into = quote! {
+        let #event_name: ::core::result::Result<::ioevent::bus::state::ProcedureCallData, ::ioevent::error::TryFromEventError> = ::std::convert::TryInto::try_into(#event_name);
+    };
+
+    let state_clone = if let Some((_, state_name)) = state_ty_name {
+        quote! {
+            let #state_name = ::std::clone::Clone::clone(#state_name);
+        }
+    } else {
+        quote! {
+            let _state = ::std::clone::Clone::clone(_state);
+        }
+    };
+
+    let original_stmts = &original_fn.block.stmts;
+
+    let async_block = if let Some((_, state_name)) = state_ty_name {
+        quote! {
+            async move {
+                let #event_name = #event_name?;
+                if #event_ty::match_self(&#event_name) {
+                    let echo = #event_name.echo;
+                    let #event_name = #event_ty::try_from(#event_name)?;
+                    let response: ::core::result::Result<_, ::ioevent::error::CallSubscribeError> = {
+                        #(#original_stmts)*
+                    };
+                    #state_name.resolve::<#event_ty>(echo, &response?).await?;
+                }
+                Ok(())
+            }
+        }
+    } else {
+        quote! {
+            async move {
+                let #event_name = #event_name?;
+                if #event_ty::match_self(&#event_name) {
+                    let echo = #event_name.echo;
+                    let #event_name = #event_ty::try_from(#event_name)?;
+                    let response: ::core::result::Result<_, ::ioevent::error::CallSubscribeError> = {
+                        #(#original_stmts)*
+                    };
+                    _state.resolve::<#event_ty>(echo, &response?).await?;
+                }
+                Ok(())
+            }
+        }
+    };
+
+    let func_name = &original_fn.sig.ident;
+    let mod_name = format_ident!("{}", func_name);
+
+    let mod_block = quote! {
+        #[doc(hidden)]
+        pub mod #mod_name {
+            use super::*;
+            pub type _Event = ::ioevent::bus::state::ProcedureCallData;
+        }
+    };
+
+    let expanded = quote! {
+        fn #func_name #generics (#new_params) -> ::ioevent::future::SubscribeFutureRet {
+            #event_try_into
+            #state_clone
+            ::std::boxed::Box::pin(#async_block)
+        }
+        #mod_block
+    };
+
+    TokenStream::from(expanded)
+}

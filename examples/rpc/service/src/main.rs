@@ -1,16 +1,15 @@
 use ioevent::{
     State,
     bus::state::{
-        DefaultProcedureWright, ProcedureCallData, ProcedureCallExt, ProcedureCallRequest,
-        ProcedureCallWright,
+        DefaultProcedureWright, ProcedureCallExt, ProcedureCallRequest, ProcedureCallWright,
+        procedure,
     },
-    subscriber,
-    prelude::*
+    prelude::*,
 };
 use rpc_common::*;
 use tokio::{process::Command, select};
 
-static SUBSCRIBERS: &[Subscriber<MyState>] = &[create_subscriber!(print)];
+static SUBSCRIBERS: &[Subscriber<MyState>] = &[create_subscriber!(print_test)];
 
 #[derive(Clone, Default)]
 struct MyState {
@@ -22,16 +21,10 @@ impl ProcedureCallWright for MyState {
     }
 }
 
-#[subscriber]
-async fn print(state: State<MyState>, e: ProcedureCallData) -> Result {
-    if CallPrint::match_self(&e) {
-        let echo = e.echo;
-        let call = CallPrint::try_from(e)?;
-        println!("{}", call.0);
-        let response = CallPrintResponse(42);
-        state.resolve::<CallPrint>(echo, &response).await?;
-    }
-    Ok(())
+#[procedure]
+async fn print_test(e: CallPrint) -> Result {
+    println!("{}", e.0);
+    Ok(CallPrintResponse(42))
 }
 
 #[tokio::main]

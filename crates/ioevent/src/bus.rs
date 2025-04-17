@@ -260,11 +260,11 @@ where
 }
 
 pub mod state {
-    use std::{borrow::Cow, ops::Deref, sync::Arc};
+    use std::{ops::Deref, sync::Arc};
 
     use rand::{RngCore, SeedableRng, rngs::SmallRng};
     use serde::{Deserialize, Serialize};
-    use tokio::sync::{Mutex, RwLock, oneshot};
+    use tokio::sync::{Mutex, oneshot};
 
     use crate::{
         error::{CallSubscribeError, CborValueError, TryFromEventError},
@@ -338,7 +338,6 @@ pub mod state {
             Ok(event)
         }
     }
-
     pub fn encode_request(path: &str, echo: u64, r#type: ProcedureCallType) -> String {
         match r#type {
             ProcedureCallType::Request => format!(
@@ -370,6 +369,8 @@ pub mod state {
         Request,
         Response,
     }
+    #[cfg(feature = "macros")]
+    pub use ioevent_macro::{ProcedureCall, procedure};
     pub trait ProcedureCall: Serialize + for<'de> Deserialize<'de> {
         const PATH: &'static str;
     }

@@ -43,8 +43,15 @@ async fn main() {
     tokio::spawn(async move {
         let state = state_.clone();
         loop {
-            time::sleep(Duration::from_millis(1)).await;
-            let call = state.call(&CallPrint(format!("{}", state.counter.load(Ordering::Relaxed)))).await;
+            time::sleep(Duration::from_millis(1000)).await;
+
+            let call = state
+                .call(&CallPrint(format!(
+                    "{}",
+                    state.counter.load(Ordering::Relaxed)
+                )))
+                .await;
+
             if let Ok(call) = call {
                 state.counter.fetch_add(call.0, Ordering::Relaxed);
             }

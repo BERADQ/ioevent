@@ -12,7 +12,7 @@ use crate::{
 pub use ciborium::Value;
 
 #[cfg(feature = "macros")]
-pub use ioevent_macro::*;
+pub use ioevent_macro::{Event, subscriber};
 
 /// Raw event.
 #[derive(Deserialize, Serialize, Debug, Clone)]

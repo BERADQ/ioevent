@@ -1,8 +1,4 @@
-#![doc = "
-# `ioevent`
-
-Turn a pair of io into an eventbus
-"]
+#![doc = include_str!("../../../README.md")]
 pub mod bus;
 pub mod error;
 pub mod event;
