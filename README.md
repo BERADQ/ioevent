@@ -88,6 +88,10 @@ loop {
 // ... and effect see example
 ```
 
+**Procedure Call**
+
+**See The [Examples](https://github.com/BERADQ/ioevent/tree/main/examples/rpc)**
+
 ## todo
 - [ ] middleware support
 - [ ] custom serializer & deserializer
