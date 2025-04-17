@@ -1,3 +1,5 @@
+use std::mem::swap;
+
 use channels::{
     io::{AsyncRead, AsyncWrite, IntoRead, IntoWrite},
     serdes::Cbor,
@@ -42,21 +44,15 @@ where
                 let results = task::unconstrained(async {
                     drop(v);
                     let results = self.subs.emit(state, &e).await;
-                    let mut dirty = join_all(
-                        state
-                            .event_shootrs
-                            .read()
-                            .await
-                            .iter()
-                            .map(|st| st.try_shoot_out(&e)),
-                    )
-                    .await
-                    .into_iter();
-                    if dirty.any(|d| d) {
-                        let mut event_shoots = state.event_shootrs.write().await;
-                        event_shoots.retain(|_| !dirty.next().unwrap());
-                        drop(event_shoots);
+                    let mut event_shooters = state.event_shooters.lock().await;
+                    let mut later: Vec<_> = Vec::with_capacity(event_shooters.len());
+                    swap(&mut later, &mut event_shooters);
+                    for st in later.into_iter() {
+                        if let Some(st) = st.try_shoot_out(&e) {
+                            event_shooters.push(st);
+                        }
                     }
+                    drop(event_shooters);
                     results
                 })
                 .await;
@@ -264,14 +260,11 @@ where
 }
 
 pub mod state {
-    use std::sync::Arc;
+    use std::{borrow::Cow, ops::Deref, sync::Arc};
 
-    use rand::{rngs::SmallRng, RngCore, SeedableRng};
+    use rand::{RngCore, SeedableRng, rngs::SmallRng};
     use serde::{Deserialize, Serialize};
-    use tokio::{
-        sync::{Mutex, RwLock, oneshot},
-        task,
-    };
+    use tokio::sync::{Mutex, RwLock, oneshot};
 
     use crate::{
         error::{CallSubscribeError, CborValueError, TryFromEventError},
@@ -280,40 +273,27 @@ pub mod state {
 
     use super::EffectWright;
 
-    pub struct EventShootr {
-        pub selector: Box<dyn Fn(&EventData) -> bool>,
-        pub shooter: Mutex<Option<oneshot::Sender<EventData>>>,
+    pub struct EventShooter {
+        pub selector: Box<dyn Fn(&EventData) -> bool + Send + Sync + 'static>,
+        pub shooter: oneshot::Sender<EventData>,
     }
-    impl EventShootr {
+    impl EventShooter {
         pub fn shoot_out_with(
-            selector: Box<dyn Fn(&EventData) -> bool>,
+            selector: Box<dyn Fn(&EventData) -> bool + Send + Sync + 'static>,
         ) -> (Self, oneshot::Receiver<EventData>) {
             let (shooter, receiver) = oneshot::channel();
-            (
-                Self {
-                    selector,
-                    shooter: Mutex::new(Some(shooter)),
-                },
-                receiver,
-            )
+            (Self { selector, shooter }, receiver)
         }
-        pub async fn try_shoot_out(&self, event: &EventData) -> bool {
+        pub fn try_shoot_out(self, event: &EventData) -> Option<Self> {
             if (self.selector)(event) {
-                unsafe { task::unconstrained(self.shoot_out(event)).await }
+                unsafe { self.shoot_out(event) };
+                None
             } else {
-                false
+                Some(self)
             }
         }
-        pub async unsafe fn shoot_out(&self, event: &EventData) -> bool {
-            let mut shooter = self.shooter.lock().await;
-            if let Some(shooter) = shooter.take() {
-                shooter.send(event.clone()).is_ok()
-            } else {
-                false
-            }
-        }
-        pub async fn is_none(&self) -> bool {
-            self.shooter.lock().await.is_none()
+        pub unsafe fn shoot_out(self, event: &EventData) -> bool {
+            self.shooter.send(event.clone()).is_ok()
         }
     }
     /// The state of the bus. For collect side effects.
@@ -321,7 +301,13 @@ pub mod state {
     pub struct State<T> {
         pub state: T,
         pub bus: EffectWright,
-        pub event_shootrs: Arc<RwLock<Vec<EventShootr>>>,
+        pub event_shooters: Arc<Mutex<Vec<EventShooter>>>,
+    }
+    impl<T> Deref for State<T> {
+        type Target = T;
+        fn deref(&self) -> &Self::Target {
+            &self.state
+        }
     }
     impl<T> State<T> {
         /// Create a new state.
@@ -329,7 +315,7 @@ pub mod state {
             Self {
                 state,
                 bus,
-                event_shootrs: Arc::new(RwLock::new(Vec::new())),
+                event_shooters: Arc::new(Mutex::new(Vec::new())),
             }
         }
         /// Wait for the next event.
@@ -342,10 +328,10 @@ pub mod state {
         }
         pub async fn wait_next_with<F>(&self, selector: F) -> Result<EventData, CallSubscribeError>
         where
-            F: Fn(&EventData) -> bool + 'static,
+            F: Fn(&EventData) -> bool + Send + Sync + 'static,
         {
-            let (shoot, rx) = EventShootr::shoot_out_with(Box::new(selector));
-            let mut event_shoots = self.event_shootrs.write().await;
+            let (shoot, rx) = EventShooter::shoot_out_with(Box::new(selector));
+            let mut event_shoots = self.event_shooters.lock().await;
             event_shoots.push(shoot);
             drop(event_shoots);
             let event = rx.await?;
@@ -463,7 +449,11 @@ pub mod state {
         ) -> impl Future<Output = Result<P::RESPONSE, CallSubscribeError>>
         where
             P: ProcedureCallRequest;
-        fn resolve<P>(&self, echo: u64, response: &P::RESPONSE) -> impl Future<Output = Result<(), CallSubscribeError>>
+        fn resolve<P>(
+            &self,
+            echo: u64,
+            response: &P::RESPONSE,
+        ) -> impl Future<Output = Result<(), CallSubscribeError>>
         where
             P: ProcedureCallRequest;
     }
@@ -494,7 +484,11 @@ pub mod state {
             let response = ProcedureCallData::try_from(&response)?;
             Ok(P::RESPONSE::try_from(response)?)
         }
-        async fn resolve<P>(&self, echo: u64, response: &P::RESPONSE) -> Result<(), CallSubscribeError>
+        async fn resolve<P>(
+            &self,
+            echo: u64,
+            response: &P::RESPONSE,
+        ) -> Result<(), CallSubscribeError>
         where
             P: ProcedureCallRequest,
         {

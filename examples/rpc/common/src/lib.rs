@@ -18,7 +18,7 @@ impl TryFrom<ProcedureCallData> for CallPrint {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-pub struct CallPrintResponse(pub i32);
+pub struct CallPrintResponse(pub u64);
 
 impl ProcedureCall for CallPrintResponse {
     const PATH: &'static str = "com::demo::my::CallPrintResponse";

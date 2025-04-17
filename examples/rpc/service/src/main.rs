@@ -45,7 +45,7 @@ async fn main() {
         mut effect_ticker,
         effect_wright,
     } = builder.build();
-    let state = State::new(MyState::default(), effect_wright.clone());
+    let state = State::new(MyState::default(), effect_wright);
     loop {
         select! {
             _ = subscribe_ticker.tick(&state) => {},
