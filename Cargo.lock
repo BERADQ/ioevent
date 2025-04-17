@@ -475,6 +475,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpc-client"
+version = "0.1.0"
+dependencies = [
+ "ioevent",
+ "rpc-common",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "rpc-common"
+version = "0.1.0"
+dependencies = [
+ "ioevent",
+ "serde",
+]
+
+[[package]]
+name = "rpc-service"
+version = "0.1.0"
+dependencies = [
+ "ioevent",
+ "rpc-common",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"

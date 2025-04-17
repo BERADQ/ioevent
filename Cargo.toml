@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "examples/*"]
+members = ["crates/*", "examples/*/*"]
 
 [workspace.package]
 edition = "2024"
@@ -10,5 +10,6 @@ edition = "2024"
 
 ioevent = { path = "crates/ioevent" }
 ioevent_macro = { path = "crates/ioevent_macro" }
+rpc-common = { path = "examples/rpc/common" }
 tokio = { version = "1.44.2", features = ["full"] }
 serde = { version = "1.0.216", features = ["derive", "serde_derive"] }

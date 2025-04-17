@@ -14,6 +14,11 @@ pub enum TryFromEventError {
     #[error("Invalid event: {0}")]
     InvalidEvent(String),
 }
+impl From<String> for TryFromEventError {
+    fn from(value: String) -> Self {
+        TryFromEventError::InvalidEvent(value)
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum CallSubscribeError {
@@ -36,13 +41,21 @@ impl From<ciborium::value::Error> for CallSubscribeError {
         CallSubscribeError::TryFrom(TryFromEventError::Deserialize(value))
     }
 }
-
 impl From<tokio::sync::mpsc::error::SendError<EventData>> for CallSubscribeError {
     fn from(value: tokio::sync::mpsc::error::SendError<EventData>) -> Self {
         CallSubscribeError::SendEvent(value)
     }
 }
-
+impl From<tokio::sync::oneshot::error::RecvError> for CallSubscribeError {
+    fn from(value: tokio::sync::oneshot::error::RecvError) -> Self {
+        CallSubscribeError::ProcedureCall(value.to_string())
+    }
+}
+impl From<tokio::sync::oneshot::error::TryRecvError> for CallSubscribeError {
+    fn from(value: tokio::sync::oneshot::error::TryRecvError) -> Self {
+        CallSubscribeError::ProcedureCall(value.to_string())
+    }
+}
 impl From<String> for CallSubscribeError {
     fn from(value: String) -> Self {
         CallSubscribeError::Other(value)

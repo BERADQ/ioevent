@@ -9,6 +9,8 @@ use crate::{
     future::SubscribeFutureRet,
 };
 
+pub use ciborium::Value;
+
 #[cfg(feature = "macros")]
 pub use ioevent_macro::*;
 
@@ -16,7 +18,7 @@ pub use ioevent_macro::*;
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct EventData {
     pub event: String,
-    pub data: ciborium::Value,
+    pub data: Value,
 }
 
 pub type AnyEvent = EventData;
@@ -100,7 +102,7 @@ pub trait Event: Serialize + for<'ed> TryFrom<&'ed EventData, Error = TryFromEve
     fn upcast(&self) -> Result<EventData, CborValueError> {
         Ok(EventData {
             event: Self::TAG.to_string(),
-            data: ciborium::Value::serialized(&self)?,
+            data: Value::serialized(&self)?,
         })
     }
 }

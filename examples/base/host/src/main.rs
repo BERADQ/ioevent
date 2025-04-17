@@ -39,6 +39,11 @@ async fn boardcast(s: State<MyState>, event: EventData) -> Result {
     Ok(())
 }
 
+#[derive(Deserialize, Serialize, Debug, Event)]
+pub struct CallData {
+
+}
+
 #[tokio::main]
 async fn main() {
     let subscribes = Subscribers::init(SUBSCRIBERS);
