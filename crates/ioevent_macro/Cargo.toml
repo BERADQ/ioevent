@@ -5,6 +5,7 @@ edition.workspace = true
 license = "Unlicense"
 repository = "https://github.com/BERADQ/ioevent"
 description = "Macro for ioevent"
+keywords = ["macro", "ioevent", "event", "async", "tokio"]
 
 [lib]
 proc-macro = true

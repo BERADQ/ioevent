@@ -5,6 +5,18 @@ edition.workspace = true
 license = "Unlicense"
 repository = "https://github.com/BERADQ/ioevent"
 description = "Transform Any tokio Async I/O into Event-Driven Architecture with Low Overhead."
+keywords = [
+    "event",
+    "async",
+    "tokio",
+    "ioevent",
+    "event-driven",
+    "architecture",
+    "low-overhead",
+    "channels",
+    "cbor",
+    "rpc",
+]
 
 [features]
 macros = ["ioevent_macro"]
