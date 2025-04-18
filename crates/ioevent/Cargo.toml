@@ -10,11 +10,6 @@ keywords = [
     "async",
     "tokio",
     "ioevent",
-    "event-driven",
-    "architecture",
-    "low-overhead",
-    "channels",
-    "cbor",
     "rpc",
 ]
 
