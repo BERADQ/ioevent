@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "ioevent"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "channels",
  "ciborium",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "ioevent_macro"
-version = "0.1.0"
+version = "0.1.0-rc.1"
 dependencies = [
  "quote",
  "syn",
