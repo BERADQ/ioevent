@@ -308,7 +308,7 @@ dependencies = [
  "crossbeam-queue",
  "futures",
  "futures-util",
- "ioevent_macro",
+ "ioevent_macro 0.1.0-rc.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand",
  "serde",
  "thiserror",
@@ -318,6 +318,16 @@ dependencies = [
 [[package]]
 name = "ioevent_macro"
 version = "0.1.0-rc.1"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "ioevent_macro"
+version = "0.1.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fb019ae411f60e6633d528ff064a05e60990bdd8d917fc68a310f3d4b730635"
 dependencies = [
  "quote",
  "syn",
