@@ -14,5 +14,8 @@ pub mod prelude {
     #[cfg(feature = "macros")]
     pub use crate::event::subscriber;
 }
+pub mod rpc {
+    pub use crate::bus::state::*;
+}
 
 pub use prelude::*;

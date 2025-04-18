@@ -1,5 +1,3 @@
-use std::mem::swap;
-
 use channels::{
     io::{AsyncRead, AsyncWrite, IntoRead, IntoWrite},
     serdes::Cbor,
@@ -44,15 +42,14 @@ where
                 let results = task::unconstrained(async {
                     drop(v);
                     let results = self.subs.emit(state, &e).await;
-                    let mut event_shooters = state.event_shooters.lock().await;
-                    let mut later: Vec<_> = Vec::with_capacity(event_shooters.len());
-                    swap(&mut later, &mut event_shooters);
-                    for st in later.into_iter() {
-                        if let Some(st) = st.try_shoot_out(&e) {
-                            event_shooters.push(st);
+                    let len = state.event_shooters.len();
+                    for _ in 0..len {
+                        if let Some(st) = state.event_shooters.pop() {
+                            if let Some(st) = st.try_shoot_out(&e) {
+                                state.event_shooters.push(st);
+                            }
                         }
                     }
-                    drop(event_shooters);
                     results
                 })
                 .await;
@@ -262,6 +259,7 @@ where
 pub mod state {
     use std::{ops::Deref, sync::Arc};
 
+    use crossbeam_queue::SegQueue;
     use rand::{RngCore, SeedableRng, rngs::SmallRng};
     use serde::{Deserialize, Serialize};
     use tokio::sync::{Mutex, oneshot};
@@ -301,7 +299,7 @@ pub mod state {
     pub struct State<T> {
         pub state: T,
         pub bus: EffectWright,
-        pub event_shooters: Arc<Mutex<Vec<EventShooter>>>,
+        pub event_shooters: Arc<SegQueue<EventShooter>>,
     }
     impl<T> Deref for State<T> {
         type Target = T;
@@ -315,7 +313,7 @@ pub mod state {
             Self {
                 state,
                 bus,
-                event_shooters: Arc::new(Mutex::new(Vec::new())),
+                event_shooters: Arc::new(SegQueue::new()),
             }
         }
         /// Wait for the next event.
@@ -331,9 +329,7 @@ pub mod state {
             F: Fn(&EventData) -> bool + Send + Sync + 'static,
         {
             let (shoot, rx) = EventShooter::shoot_out_with(Box::new(selector));
-            let mut event_shoots = self.event_shooters.lock().await;
-            event_shoots.push(shoot);
-            drop(event_shoots);
+            self.event_shooters.push(shoot);
             let event = rx.await?;
             Ok(event)
         }
