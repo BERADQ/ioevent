@@ -3,6 +3,7 @@
 [![GitHub License](https://img.shields.io/github/license/BERADQ/ioevent)](https://github.com/BERADQ/ioevent/blob/main/LICENSE)
 ![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/BERADQ/ioevent)
 ![Crates.io Version](https://img.shields.io/crates/v/ioevent)
+[![docs.rs](https://img.shields.io/docsrs/ioevent)](https://docs.rs/ioevent/latest/ioevent)
 
 **Transform Any tokio Async I/O into Event-Driven Architecture with Low Overhead.**
 
