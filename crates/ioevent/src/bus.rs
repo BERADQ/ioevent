@@ -347,7 +347,7 @@ where
 }
 
 pub mod state {
-    use std::{ops::Deref, sync::Arc};
+    use std::{collections::HashMap, hash::Hash, ops::Deref, sync::Arc};
 
     use crossbeam_queue::SegQueue;
     use rand::{RngCore, SeedableRng, rngs::SmallRng};
@@ -360,7 +360,7 @@ pub mod state {
     };
 
     use super::EffectWright;
-    
+
     #[cfg(feature = "macros")]
     pub use ioevent_macro::{ProcedureCall, procedure};
 
@@ -546,7 +546,7 @@ pub mod state {
     /// and deserialization of procedure calls.
     pub trait ProcedureCall: Serialize + for<'de> Deserialize<'de> {
         /// The path identifier for this procedure call
-        const PATH: &'static str;
+        fn path() -> String;
     }
     /// A trait for procedure call requests.
     ///
@@ -569,7 +569,7 @@ pub mod state {
         /// * `Err(CborValueError)` - If serialization fails
         fn upcast(&self, echo: u64) -> Result<ProcedureCallData, CborValueError> {
             Ok(ProcedureCallData {
-                path: Self::PATH.to_string(),
+                path: Self::path(),
                 echo,
                 r#type: ProcedureCallType::Request,
                 data: event::Value::serialized(&self)?,
@@ -583,7 +583,7 @@ pub mod state {
         /// # Returns
         /// `true` if the procedure calls match, `false` otherwise
         fn match_self(other: &ProcedureCallData) -> bool {
-            other.path == Self::PATH && other.r#type == ProcedureCallType::Request
+            other.path == Self::path() && other.r#type == ProcedureCallType::Request
         }
     }
     /// A trait for procedure call responses.
@@ -594,9 +594,6 @@ pub mod state {
     pub trait ProcedureCallResponse:
         ProcedureCall + TryFrom<ProcedureCallData, Error = TryFromEventError> + Sized
     {
-        /// The associated request type for this response
-        type REQUEST: ProcedureCallRequest;
-
         /// Converts this response into a ProcedureCallData with the given echo.
         ///
         /// # Arguments
@@ -607,14 +604,14 @@ pub mod state {
         /// * `Err(CborValueError)` - If serialization fails
         fn upcast(&self, echo: u64) -> Result<ProcedureCallData, CborValueError> {
             Ok(ProcedureCallData {
-                path: Self::PATH.to_string(),
+                path: Self::path(),
                 echo,
                 r#type: ProcedureCallType::Response,
                 data: event::Value::serialized(&self)?,
             })
         }
         fn match_echo(other: &ProcedureCallData, echo: u64) -> bool {
-            other.path == Self::PATH
+            other.path == Self::path()
                 && other.r#type == ProcedureCallType::Response
                 && other.echo == echo
         }
@@ -831,4 +828,169 @@ pub mod state {
             rand.next_u64()
         }
     }
+
+    /* Start Default Implementation of ProcedureCallResponse */
+    impl ProcedureCall for () {
+        fn path() -> String {
+            "core::Unit".to_owned()
+        }
+    }
+    impl ProcedureCallResponse for () {}
+    impl TryFrom<ProcedureCallData> for () {
+        type Error = TryFromEventError;
+        fn try_from(_: ProcedureCallData) -> Result<Self, Self::Error> {
+            Ok(())
+        }
+    }
+
+    impl<T, E> ProcedureCall for Result<T, E>
+    where
+        T: ProcedureCall,
+        E: ProcedureCall,
+    {
+        fn path() -> String {
+            format!("core::Result<{}, {}>", T::path(), E::path())
+        }
+    }
+    impl<T, E> ProcedureCallResponse for Result<T, E>
+    where
+        T: ProcedureCallResponse,
+        E: ProcedureCallResponse,
+    {
+    }
+    impl<T, E> TryFrom<ProcedureCallData> for Result<T, E>
+    where
+        T: ProcedureCall,
+        E: ProcedureCall,
+    {
+        type Error = TryFromEventError;
+        fn try_from(value: ProcedureCallData) -> Result<Self, Self::Error> {
+            Ok(value.data.deserialized()?)
+        }
+    }
+
+    impl<T> ProcedureCall for Option<T>
+    where
+        T: ProcedureCall,
+    {
+        fn path() -> String {
+            format!("core::Option<{}>", T::path())
+        }
+    }
+    impl<T> ProcedureCallResponse for Option<T> where T: ProcedureCallResponse {}
+    impl<T> TryFrom<ProcedureCallData> for Option<T>
+    where
+        T: ProcedureCall,
+    {
+        type Error = TryFromEventError;
+        fn try_from(value: ProcedureCallData) -> Result<Self, Self::Error> {
+            Ok(value.data.deserialized()?)
+        }
+    }
+
+    impl<T> ProcedureCall for Vec<T>
+    where
+        T: ProcedureCall,
+    {
+        fn path() -> String {
+            format!("core::Vec<{}>", T::path())
+        }
+    }
+    impl<T> ProcedureCallResponse for Vec<T> where T: ProcedureCallResponse {}
+    impl<T> TryFrom<ProcedureCallData> for Vec<T>
+    where
+        T: ProcedureCall,
+    {
+        type Error = TryFromEventError;
+        fn try_from(value: ProcedureCallData) -> Result<Self, Self::Error> {
+            Ok(value.data.deserialized()?)
+        }
+    }
+
+    impl<K, V> ProcedureCall for HashMap<K, V>
+    where
+        K: ProcedureCall + Hash + Eq,
+        V: ProcedureCall,
+    {
+        fn path() -> String {
+            format!("core::HashMap<{}, {}>", K::path(), V::path())
+        }
+    }
+    impl<K, V> ProcedureCallResponse for HashMap<K, V>
+    where
+        K: ProcedureCallResponse + Hash + Eq,
+        V: ProcedureCallResponse,
+    {
+    }
+    impl<K, V> TryFrom<ProcedureCallData> for HashMap<K, V>
+    where
+        K: ProcedureCallResponse + Hash + Eq,
+        V: ProcedureCallResponse,
+    {
+        type Error = TryFromEventError;
+        fn try_from(value: ProcedureCallData) -> Result<Self, Self::Error> {
+            Ok(value.data.deserialized()?)
+        }
+    }
+
+    macro_rules! impl_procedure_call {
+        ($($t:ty),*) => {
+            $(
+                impl ProcedureCall for $t {
+                    fn path() -> String {
+                        concat!("core::", stringify!($t)).to_owned()
+                    }
+                }
+                impl ProcedureCallResponse for $t {}
+                impl TryFrom<ProcedureCallData> for $t {
+                    type Error = TryFromEventError;
+                    fn try_from(value: ProcedureCallData) -> Result<Self, Self::Error> {
+                        Ok(value.data.deserialized()?)
+                    }
+                }
+            )*
+        };
+    }
+
+    impl_procedure_call!(
+        String, bool, u8, u16, u32, u64, i8, i16, i32, i64, f32, f64, char
+    );
+
+    macro_rules! impl_procedure_call_tuple {
+        ($($t:ident),*) => {
+            impl<$($t: ProcedureCall),*> ProcedureCall for ($($t,)*) {
+                fn path() -> String {
+                    "core::Tuple".to_owned() + "(" + $($t::path().as_str() + ", " +)* ")"
+                }
+            }
+            impl<$($t: ProcedureCallResponse),*> ProcedureCallResponse for ($($t,)*) {}
+            impl<$($t: ProcedureCall),*> TryFrom<ProcedureCallData> for ($($t,)*) {
+                type Error = TryFromEventError;
+                fn try_from(value: ProcedureCallData) -> Result<Self, Self::Error> {
+                    Ok(value.data.deserialized()?)
+                }
+            }
+        };
+    }
+
+    impl_procedure_call_tuple!(P0);
+    impl_procedure_call_tuple!(P0, P1);
+    impl_procedure_call_tuple!(P0, P1, P2);
+    impl_procedure_call_tuple!(P0, P1, P2, P3);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4, P5);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4, P5, P6);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4, P5, P6, P7);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4, P5, P6, P7, P8);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4, P5, P6, P7, P8, P9);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12);
+    impl_procedure_call_tuple!(P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13);
+    impl_procedure_call_tuple!(
+        P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14
+    );
+    impl_procedure_call_tuple!(
+        P0, P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, P12, P13, P14, P15
+    );
 }

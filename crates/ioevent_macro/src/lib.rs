@@ -284,7 +284,9 @@ pub fn derive_procedure_call(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         impl #impl_generics ::ioevent::bus::state::ProcedureCall for #name #ty_generics #where_clause {
-            const PATH: &'static str = #path_expr;
+            fn path() -> String {
+                #path_expr.to_owned()
+            }
         }
 
         impl #impl_generics TryFrom<::ioevent::bus::state::ProcedureCallData> for #name #ty_generics #where_clause {

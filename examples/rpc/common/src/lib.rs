@@ -11,6 +11,4 @@ impl ProcedureCallRequest for CallPrint {
 
 #[derive(Deserialize, Serialize, Debug, ProcedureCall)]
 pub struct CallPrintResponse(pub u64);
-impl ProcedureCallResponse for CallPrintResponse {
-    type REQUEST = CallPrint;
-}
+impl ProcedureCallResponse for CallPrintResponse {}

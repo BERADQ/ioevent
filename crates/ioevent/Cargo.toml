@@ -1,17 +1,11 @@
 [package]
 name = "ioevent"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 edition.workspace = true
 license = "Unlicense"
 repository = "https://github.com/BERADQ/ioevent"
 description = "Transform Any tokio Async I/O into Event-Driven Architecture with Low Overhead."
-keywords = [
-    "event",
-    "async",
-    "tokio",
-    "ioevent",
-    "rpc",
-]
+keywords = ["event", "async", "tokio", "ioevent", "rpc"]
 
 [features]
 macros = ["ioevent_macro"]
@@ -21,7 +15,7 @@ default = ["macros"]
 
 # Internal dependencies
 
-ioevent_macro = { version = "0.1.0-rc.1", optional = true }
+ioevent_macro = { version = "0.1.0-rc.2", optional = true, workspace = true }
 
 # External dependencies
 
