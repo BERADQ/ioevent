@@ -379,7 +379,7 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 let #event_name = #event_name?;
                 if <#event_ty as ::ioevent::bus::state::ProcedureCallRequest>::match_self(&#event_name) {
                     let echo = #event_name.echo;
-                    let #event_name = <#event_ty as ::std::convert::TryFrom<& ::ioevent::bus::state::ProcedureCallData>>::try_from(&#event_name)?;
+                    let #event_name = <#event_ty as ::std::convert::TryFrom<::ioevent::bus::state::ProcedureCallData>>::try_from(#event_name)?;
                     let response: ::core::result::Result<_, ::ioevent::error::CallSubscribeError> = {
                         #(#original_stmts)*
                     };
@@ -392,9 +392,9 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             async move {
                 let #event_name = #event_name?;
-                if #event_ty::match_self(&#event_name) {
+                if <#event_ty as ::ioevent::bus::state::ProcedureCallRequest>::match_self(&#event_name) {
                     let echo = #event_name.echo;
-                    let #event_name = #event_ty::try_from(#event_name)?;
+                    let #event_name = <#event_ty as ::std::convert::TryFrom<::ioevent::bus::state::ProcedureCallData>>::try_from(#event_name)?;
                     let response: ::core::result::Result<_, ::ioevent::error::CallSubscribeError> = {
                         #(#original_stmts)*
                     };
