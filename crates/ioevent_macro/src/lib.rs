@@ -383,7 +383,7 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     let response: ::core::result::Result<_, ::ioevent::error::CallSubscribeError> = {
                         #(#original_stmts)*
                     };
-                    #state_name.resolve::<#event_ty>(echo, &response?).await?;
+                    ::ioevent::bus::state::ProcedureCallExt::resolve::<#event_ty>(&#state_name, echo, &response?).await?;
                 }
                 Ok(())
             }
@@ -398,7 +398,7 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     let response: ::core::result::Result<_, ::ioevent::error::CallSubscribeError> = {
                         #(#original_stmts)*
                     };
-                    _state.resolve::<#event_ty>(echo, &response?).await?;
+                    ::ioevent::bus::state::ProcedureCallExt::resolve::<#event_ty>(&_state, echo, &response?).await?;
                 }
                 Ok(())
             }
