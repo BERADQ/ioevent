@@ -1,7 +1,34 @@
+//! Procedural macros for the I/O event system.
+//!
+//! This crate provides procedural macros for deriving event types and creating event subscribers.
+//! It is part of the `ioevent` ecosystem and should be used as a dependency of `ioevent`.
+
 use proc_macro::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::{FnArg, ItemFn, ReturnType, Token, parse_macro_input, punctuated::Punctuated};
 
+/// Derives the `Event` trait for a type.
+///
+/// This macro implements the `Event` trait for a type, allowing it to participate in the event system.
+/// It provides serialization and deserialization capabilities for the type.
+///
+/// # Attributes
+///
+/// * `#[event(tag = "custom_tag")]` - Specifies a custom tag for the event type.
+///   If not provided, the tag will be generated from the module path and type name.
+///   
+/// # Requires
+///
+/// * The type must implement the `Serialize` and `Deserialize` traits from the `serde` crate.
+///
+/// # Examples
+///
+/// ```rust
+/// #[derive(Event)]
+/// struct MyEvent {
+///     field: String,
+/// }
+/// ```
 #[proc_macro_derive(Event, attributes(event))]
 pub fn derive_event(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
@@ -71,6 +98,23 @@ pub fn derive_event(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Creates an event subscriber from an async function.
+///
+/// This macro transforms an async function into an event subscriber that can be registered
+/// with the event system. The function must take either one or two parameters:
+/// * A state parameter (optional)
+/// * An event parameter
+/// * A return value of type `Result` (optional)
+///
+/// # Examples
+///
+/// ```rust
+/// #[subscriber]
+/// async fn handle_event(event: MyEvent) -> Result {
+///     // Handle the event
+///     Ok(())
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn subscriber(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let original_fn = parse_macro_input!(item as ItemFn);
@@ -164,6 +208,29 @@ pub fn subscriber(_attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Derives the `ProcedureCall` trait for a type.
+///
+/// This macro implements the `ProcedureCall` trait for a type, allowing it to be used
+/// in remote procedure calls. It provides serialization and deserialization capabilities
+/// for the type.
+///
+/// # Attributes
+///
+/// * `#[procedure(path = "custom_path")]` - Specifies a custom path for the procedure.
+///   If not provided, the path will be generated from the module path and type name.
+///   
+/// # Requires
+///
+/// * The type must implement the `Serialize` and `Deserialize` traits from the `serde` crate.
+///
+/// # Examples
+///
+/// ```rust
+/// #[derive(ProcedureCall)]
+/// struct MyProcedure {
+///     field: String,
+/// }
+/// ```
 #[proc_macro_derive(ProcedureCall, attributes(procedure))]
 pub fn derive_procedure_call(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
@@ -231,6 +298,22 @@ pub fn derive_procedure_call(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// Creates a procedure handler from an async function.
+///
+/// This macro transforms an async function into a procedure handler that can be registered
+/// with the procedure call system. The function must take either one or two parameters:
+/// * A state parameter (optional)
+/// * A procedure parameter
+///
+/// # Examples
+///
+/// ```rust
+/// #[procedure]
+/// async fn handle_procedure(proc: MyProcedureRequest) -> Result {
+///     // Handle the procedure
+///     Ok(MyProcedureResponse)
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let original_fn = parse_macro_input!(item as ItemFn);

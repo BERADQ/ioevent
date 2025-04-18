@@ -1,5 +1,5 @@
 [package]
-name = "host"
+name = "base-host"
 version = "0.1.0"
 edition.workspace = true
 
@@ -7,3 +7,4 @@ edition.workspace = true
 ioevent.workspace = true
 tokio.workspace = true
 serde.workspace = true
+base-common.workspace = true

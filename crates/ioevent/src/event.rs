@@ -1,3 +1,8 @@
+//! Core event handling module for the I/O event system.
+//!
+//! Provides event data structures, subscriber management, and event matching functionality
+//! for building event-driven systems.
+
 use futures_util::future::join_all;
 use std::{convert::Infallible, ops::Deref};
 
@@ -14,19 +19,25 @@ pub use ciborium::Value;
 #[cfg(feature = "macros")]
 pub use ioevent_macro::{Event, subscriber};
 
-/// Raw event.
+/// Raw event data structure containing event identifier and CBOR-encoded data.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct EventData {
+    /// Event identifier or tag
     pub event: String,
+    /// Event data in CBOR format
     pub data: Value,
 }
 
+/// Type alias for any event data
 pub type AnyEvent = EventData;
 
-/// Subscribe function.
+/// Type alias for the subscription function signature
 type SubscribeFn<T> = fn(&State<T>, &EventData) -> SubscribeFutureRet;
 
-/// A subscriber.
+/// Event subscriber that processes events matching a specific selector.
+///
+/// Each subscriber is associated with an event selector and contains a handler function
+/// that processes matching events.
 pub struct Subscriber<T>((), &'static Selector, pub SubscribeFn<T>)
 where
     T: 'static;
@@ -39,12 +50,26 @@ impl<T> Deref for Subscriber<T> {
 }
 
 impl<T> Subscriber<T> {
+    /// Creates a new subscriber for a specific event type.
+    ///
+    /// # Arguments
+    /// * `f` - The subscription function to handle events
     pub const fn new<E>(f: SubscribeFn<T>) -> Self
     where
         E: Event,
     {
         Subscriber((), &E::SELECTOR, f)
     }
+
+    /// Attempts to call the subscriber's handler function if the event matches.
+    ///
+    /// # Arguments
+    /// * `state` - The current state
+    /// * `event` - The event to process
+    ///
+    /// # Returns
+    /// * `Ok(())` - If the event was processed successfully
+    /// * `Err(CallSubscribeError)` - If an error occurred during processing
     pub async fn try_call(
         &self,
         state: &State<T>,
@@ -60,7 +85,10 @@ impl<T> Subscriber<T> {
 
 type InnerSubscribers<T> = Subscriber<T>;
 
-/// A group of subscribers.
+/// A group of subscribers that can collectively handle events.
+///
+/// This structure manages multiple subscribers and provides functionality
+/// to emit events to all registered subscribers.
 pub struct Subscribers<T>(pub &'static [InnerSubscribers<T>])
 where
     T: 'static;
@@ -69,11 +97,22 @@ impl<T> Subscribers<T>
 where
     T: 'static,
 {
-    /// Initialize subscribers.
+    /// Initializes a new collection of subscribers.
+    ///
+    /// # Arguments
+    /// * `sub_iter` - An iterator over subscribers to initialize
     pub fn init(sub_iter: impl Into<&'static [InnerSubscribers<T>]>) -> Self {
         Subscribers(sub_iter.into())
     }
-    /// Emit an event to all subscribers.
+
+    /// Emits an event to all subscribers.
+    ///
+    /// # Arguments
+    /// * `state` - The current state
+    /// * `event` - The event to emit
+    ///
+    /// # Returns
+    /// An iterator over any errors that occurred during event processing
     pub async fn emit(
         &self,
         state: &State<T>,
@@ -96,9 +135,16 @@ impl From<CborValueError> for TryFromEventError {
     }
 }
 
+/// Trait defining the interface for event types in the system.
+///
+/// Events must implement this trait to participate in the event system.
+/// Provides serialization, deserialization, and type conversion capabilities.
 pub trait Event: Serialize + for<'ed> TryFrom<&'ed EventData, Error = TryFromEventError> {
+    /// Unique tag identifying this event type
     const TAG: &'static str;
+    /// Selector used to match this event type
     const SELECTOR: Selector = Selector(|x| x.event == Self::TAG);
+    /// Converts the event into its raw EventData representation
     fn upcast(&self) -> Result<EventData, CborValueError> {
         Ok(EventData {
             event: Self::TAG.to_string(),
@@ -122,9 +168,15 @@ impl TryFrom<&EventData> for EventData {
     }
 }
 
+/// A selector used to match events based on specific criteria.
+///
+/// The selector contains a function that determines whether an event
+/// matches certain conditions.
 #[derive(Hash, Eq, PartialEq)]
 pub struct Selector(pub fn(&EventData) -> bool);
+
 impl Selector {
+    /// Checks if the given event matches this selector's criteria
     fn match_event(&self, event: &EventData) -> bool {
         (self.0)(event)
     }

@@ -1,3 +1,6 @@
+//! A module for types of futures.
+
+use std::future::Future;
 use std::pin::Pin;
 
 use crate::error::CallSubscribeError;

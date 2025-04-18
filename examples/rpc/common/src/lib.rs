@@ -1,4 +1,4 @@
-use ioevent::bus::state::*;
+use ioevent::rpc::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, ProcedureCall)]
