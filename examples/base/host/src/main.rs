@@ -1,5 +1,5 @@
-use ioevent::prelude::*;
 use base_common::*;
+use ioevent::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::{process::Command, select};
 
@@ -17,7 +17,7 @@ async fn show_b(event: B) {
     println!("{:?}", event);
 }
 
-// Subscriber that broadcasts received events
+// Subscriber that re-emits received events onto the bus
 #[subscriber]
 async fn boardcast(s: State<MyState>, event: EventData) -> Result {
     s.bus.emit(&event)?;
@@ -26,34 +26,33 @@ async fn boardcast(s: State<MyState>, event: EventData) -> Result {
 
 // Event structure for call data
 #[derive(Deserialize, Serialize, Debug, Event)]
-pub struct CallData {
-}
+pub struct CallData {}
 
 #[tokio::main]
 async fn main() {
     // Initialize subscribers and create a new client process
     let subscribes = Subscribers::init(SUBSCRIBERS);
-    let child = Command::new("./client.exe");
-    
+    let child = Command::new("./base-client.exe");
+
     // Build the event bus with subscribers and client connection
     let mut builder = BusBuilder::new(subscribes);
     builder.add_pair(child.try_into().unwrap());
-    
+
     // Initialize the event bus components
-    let Bus {
-        mut subscribe_ticker,
-        mut effect_ticker,
-        effect_wright,
-    } = builder.build();
-    
+    let (bus, effect_wright) = builder.build();
+
     // Create application state
     let state = State::new(MyState, effect_wright.clone());
-    
-    // Main event loop
-    loop {
-        let effect_wright = effect_wright.clone();
-        // Periodic event sender that emits event A every second
-        let send_event = async move {
+
+    let handle = bus.run(state, &|errors| {
+        for error in errors {
+            eprintln!("error: {:?}", error);
+        }
+    });
+    // Spawn a task to periodically send event A
+    tokio::spawn(async move {
+        loop {
+            // Periodic event sender that emits event A every second
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             effect_wright
                 .emit(&A {
@@ -61,13 +60,7 @@ async fn main() {
                     bar: 1,
                 })
                 .unwrap();
-        };
-        
-        // Select between different async operations
-        select! {
-            _ = subscribe_ticker.tick(&state) => {},  // Handle subscription events
-            _ = effect_ticker.tick() => {},          // Handle effect events
-            _ = send_event => {},                    // Handle periodic event sending
         }
-    }
+    });
+    handle.await.await;
 }

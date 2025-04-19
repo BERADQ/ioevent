@@ -12,3 +12,6 @@ impl ProcedureCallRequest for CallPrint {
 #[derive(Deserialize, Serialize, Debug, ProcedureCall)]
 pub struct CallPrintResponse(pub u64);
 impl ProcedureCallResponse for CallPrintResponse {}
+
+#[derive(Deserialize, Serialize, Debug, ioevent::Event)]
+pub struct EmptyEvent;

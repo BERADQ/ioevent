@@ -4,33 +4,75 @@
 //! and managing internal event routing. It includes the Bus, SubscribeTicker, EffectTicker,
 //! EffectWright, and related components for event-driven communication.
 
+use std::mem;
+
 use channels::{
     io::{AsyncRead, AsyncWrite, IntoRead, IntoWrite},
     serdes::Cbor,
 };
-use futures::future::{self, join_all};
+use futures::future::{self, JoinAll, join_all};
 use state::State;
-use tokio::task;
+use tokio::{
+    select,
+    task::{self, JoinHandle},
+};
 
 use crate::{
-    error::{BusRecvError, BusSendError, CallSubscribeError},
+    error::{BusError, BusRecvError, BusSendError, CallSubscribeError},
     event::*,
 };
 
+pub struct CenterTicker<R>
+{
+    /// Collection of event receivers
+    pub rx: Vec<channels::Receiver<EventData, R, Cbor>>,
+    pub tx: Vec<tokio::sync::mpsc::UnboundedSender<EventData>>,
+}
+
+impl<R> CenterTicker<R>
+where
+    R: AsyncRead + Unpin,
+{
+    pub fn new(rx: Vec<channels::Receiver<EventData, R, Cbor>>) -> Self {
+        Self { rx, tx: Vec::new() }
+    }
+    pub async fn tick(
+        &mut self,
+    ) -> Result<Vec<tokio::sync::mpsc::error::SendError<EventData>>, BusRecvError<R::Error>> {
+        let iter = self.rx.iter_mut().map(|a| Box::pin(a.recv()));
+        let result = future::select_ok(iter).await;
+        match result {
+            Ok((e, v)) => {
+                let results = task::unconstrained(async {
+                    drop(v);
+                    let results = self.tx.iter_mut().map(move |a| a.send(e.clone()));
+                    results.into_iter().filter_map(Result::err)
+                })
+                .await;
+                Ok(results.collect())
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+    pub fn new_receiver(&mut self) -> tokio::sync::mpsc::UnboundedReceiver<EventData> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.tx.push(tx);
+        rx
+    }
+}
 /// A ticker that manages event distribution to subscribers.
 ///
 /// Receives events from registered receivers and distributes them to subscribers.
-pub struct SubscribeTicker<T: 'static, R> {
+pub struct SubscribeTicker<T: 'static> {
     /// Collection of subscribers that receive events
     pub subs: Subscribers<T>,
     /// Collection of event receivers
-    pub rx: Vec<channels::Receiver<EventData, R, Cbor>>,
+    pub rx: tokio::sync::mpsc::UnboundedReceiver<EventData>,
 }
 
-impl<T, R> SubscribeTicker<T, R>
+impl<T> SubscribeTicker<T>
 where
-    T: 'static,
-    R: AsyncRead + Unpin,
+    T: Send + Sync + 'static,
 {
     /// Receives and distributes events to subscribers.
     ///
@@ -47,38 +89,42 @@ where
     /// # Cancel Safety
     /// This method is cancel-safe, meaning it can be safely cancelled at any point without
     /// leaving the system in an inconsistent state.
-    pub async fn tick(
-        &mut self,
-        state: &State<T>,
-    ) -> Result<impl Iterator<Item = CallSubscribeError>, BusRecvError<R::Error>> {
-        if self.rx.is_empty() {
-            return Ok(futures::future::pending().await);
+    pub async fn tick(&mut self, state: &State<T>) -> Vec<CallSubscribeError> {
+        let event = self.rx.recv().await;
+        if let Some(event) = event {
+            let results = task::unconstrained(async {
+                let results = self.subs.emit(state, &event).await;
+                results
+            })
+            .await;
+            Some(results)
+        } else {
+            None
         }
-        let iter = self.rx.iter_mut().map(|a| Box::pin(a.recv()));
-        let result = future::select_ok(iter).await;
-        match result {
-            Ok((e, v)) => {
-                let results = task::unconstrained(async {
-                    drop(v);
-                    let results = self.subs.emit(state, &e).await;
-                    let mut processed = 0;
-                    let total = state.event_shooters.len();
-                    while processed < total {
-                        if let Some(st) = state.event_shooters.pop() {
-                            processed += 1;
-                            if let Some(st) = st.try_shoot_out(&e) {
-                                state.event_shooters.push(st);
-                            }
-                        } else {
-                            break;
-                        }
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+}
+
+pub struct SooterTicker {
+    pub rx: tokio::sync::mpsc::UnboundedReceiver<EventData>,
+}
+impl SooterTicker {
+    pub async fn tick<T>(&mut self, state: &State<T>) {
+        let event = self.rx.recv().await;
+        if let Some(event) = event {
+            task::unconstrained(async {
+                let mut benginning = state.event_shooters.lock().await;
+                let mut then = Vec::with_capacity(benginning.len());
+                mem::swap(&mut *benginning, &mut then);
+                for shooter in then.into_iter() {
+                    if let Some(shooter) = shooter.try_shoot_out(&event) {
+                        benginning.push(shooter);
                     }
-                    results
-                })
-                .await;
-                Ok(results)
-            }
-            Err(e) => Err(e.into()),
+                }
+            })
+            .await;
         }
     }
 }
@@ -86,7 +132,8 @@ where
 /// A ticker that manages event emission to external systems.
 ///
 /// Receives events from the internal state channel and forwards them to registered senders.
-pub struct EffectTicker<W> {
+pub struct EffectTicker<W>
+{
     /// Collection of event senders
     pub tx: Vec<channels::Sender<EventData, W, Cbor>>,
     /// Receiver for events from the internal state channel
@@ -111,7 +158,7 @@ where
     /// # Cancel Safety
     /// This method is cancel-safe, meaning it can be safely cancelled at any point without
     /// leaving the system in an inconsistent state.
-    pub async fn tick(&mut self) -> impl Iterator<Item = BusSendError<W::Error>> {
+    pub async fn tick(&mut self) -> Vec<BusSendError<W::Error>> {
         let event = self.state_rx.recv().await;
         if let Some(event) = event {
             let results = task::unconstrained(async {
@@ -121,12 +168,10 @@ where
                 results
             })
             .await;
-            Some(results)
+            results.collect()
         } else {
-            None
+            Vec::new()
         }
-        .into_iter()
-        .flatten()
     }
 }
 
@@ -171,16 +216,70 @@ impl EffectWright {
 /// * Internal state (via EffectWright)
 pub struct Bus<T, W, R>
 where
-    T: 'static,
+    T: 'static + Send + Sync,
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
     /// Component for receiving and distributing events
-    pub subscribe_ticker: SubscribeTicker<T, R>,
+    pub center_ticker: CenterTicker<R>,
+    /// Component for receiving and distributing events
+    pub subscribe_ticker: SubscribeTicker<T>,
     /// Component for sending events to external systems
     pub effect_ticker: EffectTicker<W>,
-    /// Component for emitting events to internal state
-    pub effect_wright: EffectWright,
+    /// Component for receiving events from external systems
+    pub sooter_ticker: SooterTicker,
+}
+impl<T, W, R> Bus<T, W, R>
+where
+    T: Clone + Send + Sync + 'static,
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
+    pub async fn run<F>(self, state: State<T>, handle_error: &'static F) -> JoinAll<JoinHandle<()>>
+    where
+        F: Fn(Vec<BusError<W::Error, R::Error>>) + Send + Sync + 'static,
+    {
+        let Bus {
+            mut center_ticker,
+            mut subscribe_ticker,
+            mut effect_ticker,
+            mut sooter_ticker,
+            ..
+        } = self;
+        let state_clone = state.clone();
+        let handle_subscribe_ticker = tokio::spawn(async move {
+            loop {
+                let error = subscribe_ticker.tick(&state_clone).await;
+                handle_error(error.into_iter().map(|e| e.into()).collect());
+            }
+        });
+        let handle_sooter_ticker = tokio::spawn(async move {
+            loop {
+                sooter_ticker.tick(&state).await;
+            }
+        });
+        loop {
+            select! {
+                errors = effect_ticker.tick() => {
+                    handle_error(errors.into_iter().map(|e|e.into()).collect());
+                }
+                errors = center_ticker.tick() => {
+                    match errors {
+                        Ok(errors) => {
+                            handle_error(errors.into_iter().map(|e|e.into()).collect());
+                        }
+                        Err(errors) => {
+                            handle_error(vec![errors.into()]);
+                        }
+                    }
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    break;
+                }
+            }
+        }
+        join_all(vec![handle_subscribe_ticker, handle_sooter_ticker])
+    }
 }
 
 /// A pair of I/O components for bidirectional event communication.
@@ -243,7 +342,7 @@ impl TryFrom<tokio::process::Command>
 /// of readers, writers, and subscribers.
 pub struct BusBuilder<T, W, R>
 where
-    T: 'static,
+    T: 'static + Send + Sync,
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
@@ -261,7 +360,7 @@ where
 
 impl<T, W, R> BusBuilder<T, W, R>
 where
-    T: 'static,
+    T: 'static + Send + Sync,
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
@@ -336,27 +435,33 @@ where
     ///
     /// # Returns
     /// A fully configured Bus instance ready for use
-    pub fn build(self) -> Bus<T, W, R> {
-        Bus {
-            subscribe_ticker: SubscribeTicker {
-                subs: self.subs,
-                rx: self.rx,
+    pub fn build(self) -> (Bus<T, W, R>, EffectWright) {
+        let mut center_ticker = CenterTicker::new(self.rx);
+        let rx1 = center_ticker.new_receiver();
+        let rx2 = center_ticker.new_receiver();
+        (
+            Bus {
+                center_ticker,
+                sooter_ticker: SooterTicker { rx: rx2 },
+                subscribe_ticker: SubscribeTicker {
+                    subs: self.subs,
+                    rx: rx1,
+                },
+                effect_ticker: EffectTicker {
+                    tx: self.tx,
+                    state_rx: self.state_rx,
+                },
             },
-            effect_ticker: EffectTicker {
-                tx: self.tx,
-                state_rx: self.state_rx,
-            },
-            effect_wright: EffectWright {
+            EffectWright {
                 state_tx: self.state_tx,
             },
-        }
+        )
     }
 }
 
 pub mod state {
     use std::{collections::HashMap, hash::Hash, ops::Deref, sync::Arc};
 
-    use crossbeam_queue::SegQueue;
     use rand::{RngCore, SeedableRng, rngs::SmallRng};
     use serde::{Deserialize, Serialize};
     use tokio::sync::{Mutex, oneshot};
@@ -440,7 +545,7 @@ pub mod state {
         /// Component for emitting events to the bus
         pub bus: EffectWright,
         /// Queue of event shooters waiting for specific events
-        pub event_shooters: Arc<SegQueue<EventShooter>>,
+        pub event_shooters: Arc<Mutex<Vec<EventShooter>>>,
     }
 
     impl<T> Deref for State<T> {
@@ -460,7 +565,7 @@ pub mod state {
             Self {
                 state,
                 bus,
-                event_shooters: Arc::new(SegQueue::new()),
+                event_shooters: Arc::new(Mutex::new(Vec::new())),
             }
         }
         /// Waits for the next event of a specific type.
@@ -475,7 +580,8 @@ pub mod state {
         where
             E: Event,
         {
-            let event = self.wait_next_with(E::SELECTOR.0).await?;
+            let event = self.wait_next_with(E::SELECTOR.0).await;
+            let event = event.await?;
             Ok(E::try_from(&event)?)
         }
         /// Waits for the next event that matches the specified selector function.
@@ -486,14 +592,13 @@ pub mod state {
         /// # Returns
         /// * `Ok(EventData)` - The received event data
         /// * `Err(CallSubscribeError)` - If there was an error receiving the event
-        pub async fn wait_next_with<F>(&self, selector: F) -> Result<EventData, CallSubscribeError>
+        pub async fn wait_next_with<F>(&self, selector: F) -> oneshot::Receiver<EventData>
         where
             F: Fn(&EventData) -> bool + Send + Sync + 'static,
         {
             let (shoot, rx) = EventShooter::shoot_out_with(Box::new(selector));
-            self.event_shooters.push(shoot);
-            let event = rx.await?;
-            Ok(event)
+            self.event_shooters.lock().await.push(shoot);
+            rx
         }
     }
     /// Encodes a procedure call request or response into a string format.
@@ -761,7 +866,6 @@ pub mod state {
         {
             let echo = self.state.next_echo().await;
             let request = procedure.upcast(echo)?;
-            self.bus.emit(&request)?;
             let response = self
                 .wait_next_with(move |e| {
                     let mut matched = false;
@@ -774,7 +878,9 @@ pub mod state {
                     }
                     matched
                 })
-                .await?;
+                .await;
+            self.bus.emit(&request)?;
+            let response = response.await?;
             let response = ProcedureCallData::try_from(&response)?;
             Ok(P::RESPONSE::try_from(response)?)
         }

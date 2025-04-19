@@ -1,9 +1,6 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
 };
 
 use ioevent::{
@@ -12,10 +9,10 @@ use ioevent::{
     prelude::*,
 };
 use rpc_common::*;
-use tokio::{select, time};
+use tokio::select;
 
 // Define subscribers for handling events
-const SUBSCRIBERS: &[Subscriber<MyState>] = &[];
+const SUBSCRIBERS: &[Subscriber<MyState>] = &[create_subscriber!(call_print)];
 
 // Application state with procedure call support and counter
 #[derive(Clone, Default)]
@@ -31,53 +28,62 @@ impl ProcedureCallWright for MyState {
     }
 }
 
+#[subscriber]
+async fn call_print(state: State<MyState>, _e: EmptyEvent) -> Result {
+    // Make RPC call to print the current counter value
+    let call = state
+        .call(&CallPrint(format!(
+            "{}",
+            state.counter.load(Ordering::Relaxed)
+        )))
+        .await;
+
+    // If call is successful, update the counter with the response value
+    if let Ok(call) = call {
+        state.counter.fetch_add(call.0, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize subscribers and create event bus
     let subscribes = Subscribers::init(SUBSCRIBERS);
     let mut builder = BusBuilder::new(subscribes);
-    
+
     // Add standard I/O as communication channel
     builder.add_pair(IoPair::stdio());
-    
+
     // Initialize event bus components
-    let Bus {
-        mut subscribe_ticker,
-        mut effect_ticker,
+    let (
+        Bus {
+            mut center_ticker,
+            mut subscribe_ticker,
+            mut effect_ticker,
+            mut sooter_ticker,
+        },
         effect_wright,
-    } = builder.build();
-    
+    ) = builder.build();
+
     // Create application state
-    let state = State::new(MyState::default(), effect_wright.clone());
-
-    // Spawn a background task for periodic RPC calls
-    let state_ = state.clone();
-    tokio::spawn(async move {
-        let state = state_.clone();
-        loop {
-            // Wait for 1 second between calls
-            time::sleep(Duration::from_millis(1000)).await;
-
-            // Make RPC call to print the current counter value
-            let call = state
-                .call(&CallPrint(format!(
-                    "{}",
-                    state.counter.load(Ordering::Relaxed)
-                )))
-                .await;
-
-            // If call is successful, update the counter with the response value
-            if let Ok(call) = call {
-                state.counter.fetch_add(call.0, Ordering::Relaxed);
-            }
-        }
-    });
+    let state = State::new(MyState::default(), effect_wright);
 
     // Main event loop for handling events
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        loop {
+            let _ = subscribe_ticker.tick(&state_clone).await;
+        }
+    });
+    tokio::spawn(async move {
+        loop {
+            let _ = sooter_ticker.tick(&state).await;
+        }
+    });
     loop {
         select! {
-            _ = subscribe_ticker.tick(&state) => {},  // Handle event subscriptions
-            _ = effect_ticker.tick() => {},          // Handle effect events
+            _ = effect_ticker.tick() => {}
+            _ = center_ticker.tick() => {}
         }
     }
 }

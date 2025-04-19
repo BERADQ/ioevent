@@ -4,6 +4,7 @@
 
 use channels::serdes::Cbor;
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 use crate::event::EventData;
 
@@ -192,6 +193,20 @@ type CborDeError = <Cbor as channels::serdes::Deserializer<EventData>>::Error;
 pub enum BusRecvError<R> {
     /// An error occurred while receiving data through the channel
     Recv(channels::error::RecvError<CborDeError, R>),
+    BoardcastRecv(tokio::sync::broadcast::error::RecvError),
+    BoardcastSend(tokio::sync::broadcast::error::SendError<EventData>),
+}
+
+impl<R> From<tokio::sync::broadcast::error::RecvError> for BusRecvError<R> {
+    fn from(value: tokio::sync::broadcast::error::RecvError) -> Self {
+        BusRecvError::BoardcastRecv(value)
+    }
+}
+
+impl<R> From<tokio::sync::broadcast::error::SendError<EventData>> for BusRecvError<R> {
+    fn from(value: tokio::sync::broadcast::error::SendError<EventData>) -> Self {
+        BusRecvError::BoardcastSend(value)
+    }
 }
 
 impl<R> From<channels::error::RecvError<CborDeError, R>> for BusRecvError<R> {
@@ -204,6 +219,34 @@ impl<R> From<channels::error::RecvError<CborDeError, R>> for BusRecvError<R> {
     /// A BusRecvError::Recv variant containing the original error
     fn from(value: channels::error::RecvError<CborDeError, R>) -> Self {
         BusRecvError::Recv(value)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum BusError<W, R> {
+    BusSend(BusSendError<W>),
+    CallSubscribe(CallSubscribeError),
+    SendError(mpsc::error::SendError<EventData>),
+    BusRecv(BusRecvError<R>),
+}
+impl<W, R> From<BusSendError<W>> for BusError<W, R> {
+    fn from(value: BusSendError<W>) -> Self {
+        BusError::BusSend(value)
+    }
+}
+impl<W, R> From<CallSubscribeError> for BusError<W, R> {
+    fn from(value: CallSubscribeError) -> Self {
+        BusError::CallSubscribe(value)
+    }
+}
+impl<W, R> From<mpsc::error::SendError<EventData>> for BusError<W, R> {
+    fn from(value: mpsc::error::SendError<EventData>) -> Self {
+        BusError::SendError(value)
+    }
+}
+impl<W, R> From<BusRecvError<R>> for BusError<W, R> {
+    fn from(value: BusRecvError<R>) -> Self {
+        BusError::BusRecv(value)
     }
 }
 

@@ -1,5 +1,5 @@
-use ioevent::prelude::*;
 use base_common::*;
+use ioevent::prelude::*;
 use tokio::select;
 
 // Define subscribers for handling events A and C
@@ -32,25 +32,19 @@ async fn main() {
     // Initialize subscribers and create event bus
     let subscribes = Subscribers::init(SUBSCRIBERS);
     let mut builder = BusBuilder::new(subscribes);
-    
+
     // Add standard I/O as communication channel
     builder.add_pair(IoPair::stdio());
-    
+
     // Initialize event bus components
-    let Bus {
-        mut subscribe_ticker,
-        mut effect_ticker,
-        effect_wright,
-    } = builder.build();
-    
+    let (bus, effect_wright) = builder.build();
+
     // Create application state
-    let state = State::new(MyState, effect_wright.clone());
-    
-    // Main event loop
-    loop {
-        select! {
-            _ = subscribe_ticker.tick(&state) => {},  // Handle subscription events
-            _ = effect_ticker.tick() => {},          // Handle effect events
+    let state = State::new(MyState, effect_wright);
+    let handle = bus.run(state, &|errors| {
+        for error in errors {
+            eprintln!("error: {:?}", error);
         }
-    }
+    });
+    handle.await.await;
 }

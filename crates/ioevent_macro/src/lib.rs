@@ -356,7 +356,7 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
             _state: &::ioevent::bus::state::State<_STATE>,
             #event_name: &::ioevent::event::EventData
         };
-        (quote! { <#(#raw_generics),* _STATE: ::ioevent::bus::state::ProcedureCallWright + ::std::clone::Clone + 'static> }, params)
+        (quote! { <#(#raw_generics),* _STATE: ::ioevent::bus::state::ProcedureCallWright + ::std::clone::Clone + ::std::marker::Send + ::std::marker::Sync + 'static> }, params)
     };
 
     let event_try_into = quote! {
