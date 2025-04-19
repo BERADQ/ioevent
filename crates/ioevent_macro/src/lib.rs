@@ -188,16 +188,18 @@ pub fn subscriber(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let mod_name = format_ident!("{}", func_name);
 
+    let vis = &original_fn.vis;
+
     let mod_block = quote! {
         #[doc(hidden)]
-        pub mod #mod_name {
+        #vis mod #mod_name {
             use super::*;
             pub type _Event = #event_ty;
         }
     };
 
     let expanded = quote! {
-        fn #func_name #generics (#new_params) -> ::ioevent::future::SubscribeFutureRet {
+        #vis fn #func_name #generics (#new_params) -> ::ioevent::future::SubscribeFutureRet {
             #event_try_into
             #state_clone
             ::std::boxed::Box::pin(#async_block)
@@ -323,7 +325,7 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
     if original_fn.sig.asyncness.is_none() {
         return quote! { compile_error!("procedure macro can only be applied to async functions"); }.into();
     }
-
+    
     let params = original_fn.sig.inputs.iter().collect::<Vec<_>>();
     let (state_param, event_param) = match params.len() {
         1 => (None, params[0]),
@@ -408,16 +410,18 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let func_name = &original_fn.sig.ident;
     let mod_name = format_ident!("{}", func_name);
 
+    let vis = &original_fn.vis;
+
     let mod_block = quote! {
         #[doc(hidden)]
-        pub mod #mod_name {
+        #vis mod #mod_name {
             use super::*;
             pub type _Event = ::ioevent::bus::state::ProcedureCallData;
         }
     };
 
     let expanded = quote! {
-        fn #func_name #generics (#new_params) -> ::ioevent::future::SubscribeFutureRet {
+        #vis fn #func_name #generics (#new_params) -> ::ioevent::future::SubscribeFutureRet {
             #event_try_into
             #state_clone
             ::std::boxed::Box::pin(#async_block)
