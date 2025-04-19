@@ -61,12 +61,16 @@ where
                 let results = task::unconstrained(async {
                     drop(v);
                     let results = self.subs.emit(state, &e).await;
-                    let len = state.event_shooters.len();
-                    for _ in 0..len {
+                    let mut processed = 0;
+                    let total = state.event_shooters.len();
+                    while processed < total {
                         if let Some(st) = state.event_shooters.pop() {
+                            processed += 1;
                             if let Some(st) = st.try_shoot_out(&e) {
                                 state.event_shooters.push(st);
                             }
+                        } else {
+                            break;
                         }
                     }
                     results
