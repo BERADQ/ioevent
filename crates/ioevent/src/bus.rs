@@ -51,6 +51,9 @@ where
         &mut self,
         state: &State<T>,
     ) -> Result<impl Iterator<Item = CallSubscribeError>, BusRecvError<R::Error>> {
+        if self.rx.is_empty() {
+            return Ok(futures::future::pending().await);
+        }
         let iter = self.rx.iter_mut().map(|a| Box::pin(a.recv()));
         let result = future::select_ok(iter).await;
         match result {
