@@ -89,6 +89,9 @@ async fn main() {
                 // **Important:** Consume the iterator to process all center errors.
                 for _ in errors {}
             }
+            _ = tokio::signal::ctrl_c() => {
+                break;
+            }
         }
     }
 }

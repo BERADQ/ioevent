@@ -32,16 +32,21 @@
 
 use std::mem;
 
+use crate::state::State;
 use channels::{
     io::{AsyncRead, AsyncWrite, IntoRead, IntoWrite},
     serdes::Cbor,
 };
-use futures::future::{self, JoinAll, join_all};
-use crate::state::State;
+use futures::{
+    FutureExt,
+    future::{self, BoxFuture, JoinAll, join_all},
+};
 use tokio::{
-    select,
+    pin, select,
+    sync::{broadcast, oneshot},
     task::{self, JoinHandle},
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     error::{BusError, BusSendError, CallSubscribeError},
@@ -323,10 +328,16 @@ where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
-    pub async fn run<F>(self, state: State<T>, handle_error: &'static F) -> JoinAll<JoinHandle<()>>
+    pub async fn run<F>(
+        self,
+        state: State<T>,
+        handle_error: &'static F,
+    ) -> CloseHandle<impl Future<Output = ()>>
     where
         F: Fn(BusError<W::Error, R::Error>) + Send + Sync + 'static,
     {
+        let token = CancellationToken::new();
+        let (close_signal, mut close_signal_receiver) = broadcast::channel::<()>(1);
         let Bus {
             mut center_ticker,
             mut subscribe_ticker,
@@ -335,31 +346,67 @@ where
             ..
         } = self;
         let state_clone = state.clone();
+        let token_clone = token.clone();
         let handle_subscribe_ticker = tokio::spawn(async move {
             loop {
+                if token_clone.is_cancelled() {
+                    break;
+                }
                 let error = subscribe_ticker.tick(&state_clone).await;
                 error.map(|e| e.into()).for_each(handle_error);
             }
         });
+        let token_clone = token.clone();
         let handle_shooter_ticker = tokio::spawn(async move {
             loop {
+                if token_clone.is_cancelled() {
+                    break;
+                }
                 shooter_ticker.tick(&state).await;
             }
         });
-        loop {
-            select! {
-                errors = effect_ticker.tick() => {
-                    errors.map(|e| e.into()).for_each(handle_error);
-                }
-                errors = center_ticker.tick() => {
-                    errors.map(|e|e.into()).for_each(handle_error);
-                }
-                _ = tokio::signal::ctrl_c() => {
-                    break;
+        let future = async move {
+            loop {
+                select! {
+                    errors = effect_ticker.tick() => {
+                        errors.map(|e| e.into()).for_each(handle_error);
+                    }
+                    errors = center_ticker.tick() => {
+                        errors.map(|e|e.into()).for_each(handle_error);
+                    }
+                    _ = close_signal_receiver.recv() => {
+                        token.cancel();
+                        handle_subscribe_ticker.abort();
+                        handle_shooter_ticker.abort();
+                        break;
+                    }
                 }
             }
+        };
+        CloseHandle {
+            close_signal,
+            future: future,
         }
-        join_all(vec![handle_subscribe_ticker, handle_shooter_ticker])
+    }
+}
+
+pub struct CloseHandle<F>
+where
+    F: Future<Output = ()>,
+{
+    close_signal: broadcast::Sender<()>,
+    future: F,
+}
+impl<F> CloseHandle<F>
+where
+    F: Future<Output = ()>,
+{
+    pub async fn close(self) {
+        self.close_signal.send(()).unwrap();
+        self.future.await;
+    }
+    pub async fn join(self) {
+        self.future.await
     }
 }
 

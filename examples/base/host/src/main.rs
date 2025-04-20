@@ -60,5 +60,5 @@ async fn main() {
                 .unwrap();
         }
     });
-    handle.await.await;
+    handle.await.join().await;
 }

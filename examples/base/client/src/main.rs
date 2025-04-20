@@ -43,5 +43,5 @@ async fn main() {
     let handle = bus.run(state, &|error| {
         eprintln!("[Client] BusError: {:?}", error);
     });
-    handle.await.await;
+    handle.await.join().await;
 }
