@@ -1,8 +1,7 @@
 use base_common::*;
 use ioevent::prelude::*;
-use tokio::select;
 
-// Define subscribers for handling events A and C
+// Define subscribers responsible for handling specific events.
 static SUBSCRIBERS: &[Subscriber<MyState>] =
     &[create_subscriber!(echo), create_subscriber!(echo_c)];
 
@@ -29,7 +28,7 @@ async fn echo_c<T: Clone>(state: State<T>, event: C) -> Result {
 
 #[tokio::main]
 async fn main() {
-    // Initialize subscribers and create event bus
+    // Initialize subscribers and configure the event bus builder.
     let subscribes = Subscribers::init(SUBSCRIBERS);
     let mut builder = BusBuilder::new(subscribes);
 
@@ -41,10 +40,8 @@ async fn main() {
 
     // Create application state
     let state = State::new(MyState, effect_wright);
-    let handle = bus.run(state, &|errors| {
-        for error in errors {
-            eprintln!("error: {:?}", error);
-        }
+    let handle = bus.run(state, &|error| {
+        eprintln!("[Client] BusError: {:?}", error);
     });
     handle.await.await;
 }

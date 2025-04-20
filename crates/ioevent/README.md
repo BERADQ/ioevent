@@ -5,151 +5,156 @@
 ![Crates.io Version](https://img.shields.io/crates/v/ioevent)
 [![docs.rs](https://img.shields.io/docsrs/ioevent)](https://docs.rs/ioevent/latest/ioevent)
 
-**Easily Transform Tokio Async I/O into an Event-Driven Architecture with Low Overhead.**
-
-A lightweight Rust crate built on Tokio's async runtime, providing a flexible event bus abstraction for asynchronous I/O operations. Perfect for building decoupled, event-driven systems with optimized performance, especially useful for inter-process communication or modular application design.
+A lightweight Rust crate for building event-driven applications on top of Tokio's async I/O streams with low overhead. Facilitates decoupled architectures, suitable for inter-process communication or modular designs.
 
 ## Features ✨
-- 🚀 Event-driven Architecture: Convert async I/O operations into unified event streams
-- 🔗 Tokio-powered: Seamless integration with Tokio's async ecosystem
-- 🧩 Extensible: Custom event types and handler registration
-- 🔄 Bi-directional Communication: Supports event emission and response handling (via Procedure Calls).
+- **Event-driven Architecture**: Transforms async I/O operations into unified event streams.
+- **Tokio Integration**: Built upon and integrates seamlessly with Tokio's async runtime.
+- **Extensibility**: Supports custom event types and dynamic handler registration.
+- **Bi-directional Communication**: Enables event emission and response handling through Procedure Calls.
 
 ## Usage 🚀
 
-**See The [Examples](https://github.com/BERADQ/ioevent/tree/main/examples)**
+Refer to the [Examples](https://github.com/BERADQ/ioevent/tree/main/examples) directory for complete code samples.
 
-**Define Events**
+**1. Define Events**
+
+Events are simple structs or enums implementing `serde::Serialize`, `serde::Deserialize`, and deriving `ioevent::Event`.
+
 ```rust
 use serde::{Deserialize, Serialize};
 use ioevent::prelude::*;
 
-// Define events based on examples/base/common
+// Example events (similar to examples/base/common)
 #[derive(Deserialize, Serialize, Debug, Event)]
-pub struct A {
-    pub foo: String,
-    pub bar: i64,
+pub struct Ping {
+    pub timestamp: i64,
 }
 #[derive(Deserialize, Serialize, Debug, Event)]
-pub struct B {
-    pub foo: i64,
-    pub bar: String,
+pub struct Pong {
+    pub timestamp: i64,
 }
 ```
 
-**Create & Collect Subscribers**
+**2. Create Subscribers**
+
+Subscribers are async functions that handle specific event types. Use the `#[subscriber]` attribute and the `create_subscriber!` macro.
+
 ```rust
-use ioevent::prelude::*; // Assuming other necessary imports like State, Result, EventData
+use ioevent::prelude::*;
 
-// Define a simple application state structure.
-// This can hold any data your subscribers might need.
+// Define an application state (optional)
 #[derive(Clone)]
-struct MyState;
+struct AppState { /* ... fields needed by subscribers ... */ }
 
-// Define subscribers based on examples/base/host
-// Subscribers are functions that react to specific events.
-static SUBSCRIBERS: &[Subscriber<MyState>] = &[
-    create_subscriber!(show_b),
-    create_subscriber!(boardcast)
-];
-
-// Subscriber that handles event B and prints it to the console.
+// Subscriber functions (similar to examples/base/host)
 #[subscriber]
-async fn show_b(event: B) {
-    println!("Received and printing event B: {:?}", event);
-}
-
-// Subscriber that receives any event (EventData) and re-emits it onto the bus.
-// It gets access to the application state (s: State<MyState>).
-#[subscriber]
-async fn boardcast(s: State<MyState>, event: EventData) -> Result {
-    println!("Boardcasting event: {:?}", event.tag());
-    s.bus.emit(&event)?; // Use the bus handle within the state to emit.
+async fn handle_ping(state: State<AppState>, event: Ping) -> Result {
+    // println!("Received Ping: {:?}", event);
+    // Respond with a Pong event using the bus handle from the state
+    let pong = Pong { timestamp: event.timestamp };
+    state.bus.emit(&pong)?;
     Ok(())
 }
 
-// You can define more subscribers for other events...
+#[subscriber]
+async fn log_event(event: EventData) { // Receives any event
+    println!("Logged Event Tag: {:?}", event.tag());
+}
+
+// Collect subscribers into a static slice
+static SUBSCRIBERS: &[Subscriber<AppState>] = &[
+    create_subscriber!(handle_ping),
+    create_subscriber!(log_event),
+];
 ```
 
-**Create a Bus**
+**3. Build the Event Bus**
+
+Use `BusBuilder` to configure and create the event bus, adding communication pairs (e.g., `stdio` or child process I/O).
+
 ```rust
-use tokio::process::Command; // Required for Command
-use ioevent::prelude::*; // Assuming other necessary imports like BusBuilder, IoPair
+use tokio::process::Command;
+use ioevent::prelude::*;
 
-// Assuming SUBSCRIBERS is defined as above
-let subscribes = Subscribers::init(SUBSCRIBERS);
-let mut builder = BusBuilder::new(subscribes);
+fn setup_bus() -> (Bus<AppState>, EffectWright<AppState>) {
+    let subscribers = Subscribers::init(SUBSCRIBERS);
+    let mut builder = BusBuilder::new(subscribers);
 
-// Add a communication channel (pair).
-// Example 1: Connect to a child process (like in examples/base/host)
-let child = Command::new("./base-client.exe"); // Adjust path as needed
-builder.add_pair(child.try_into().unwrap());
+    // Example 1: Standard Input/Output (common for client/server)
+    // builder.add_pair(IoPair::stdio());
 
-// Example 2: Use standard input/output (often used in client examples)
-// builder.add_pair(IoPair::stdio());
+    // Example 2: Child Process Communication (host example)
+    let mut child_cmd = Command::new("path/to/your/client/executable"); // Adjust path
+    // Configure stdin/stdout redirection as needed for Command
+    // ...
+    if let Ok(pair) = IoPair::try_from(child_cmd) {
+         builder.add_pair(pair);
+    } else {
+        eprintln!("Failed to create child process pair");
+    }
 
-// Build the bus. This returns:
-// - The `bus` object itself, which contains the internal tickers.
-// - An `effect_wright` handle to send events *into* the bus from outside the subscribers.
-let (bus, effect_wright) = builder.build();
+
+    // Build the bus and get the effect handle
+    builder.build()
+}
 ```
 
-**Create a State**
-```rust
-use ioevent::State;
+**4. Create State (if needed)**
 
-// Assuming MyState and effect_wright are defined as above
-// Create the application state, associating it with the effect_wright handle.
-let state = State::new(MyState, effect_wright.clone());
+Instantiate your application state and associate it with the `EffectWright` handle obtained from `builder.build()`.
+
+```rust
+use ioevent::State; // Assuming AppState and effect_wright are defined
+
+let (bus, effect_wright) = setup_bus().await; // Assuming setup_bus is defined
+let state = State::new(AppState { /* ... initial state ... */ }, effect_wright.clone());
 ```
 
-**Run the Bus**
+**5. Run the Bus**
+
+Start the event processing loop using `bus.run()`. Provide the application state and an error handler.
+
 ```rust
-use ioevent::{Error, Result}; // Assuming Event A is defined
-use chrono::Utc; // For timestamp generation
+use ioevent::{Error, Result};
 use std::time::Duration;
 
-// Define an error handler closure.
-// This function will be called if errors occur during bus operation.
+// Assuming bus, state, effect_wright are defined
+// Define an error handler closure
 let error_handler = |errors: Vec<Error>| {
     for error in errors {
         eprintln!("Bus Error: {:?}", error);
+        // Add more robust error handling/logging as needed
     }
 };
 
-// Run the event bus. This starts the internal event loop.
-// It takes the application state and the error handler.
-// The `bus.run` function typically runs indefinitely until an error occurs or the process exits.
-// Note: bus.run returns a handle, which can be awaited if needed (e.g., in main).
-let handle = bus.run(state, &error_handler);
+// Run the event bus (typically runs indefinitely)
+let bus_handle = bus.run(state, &error_handler);
 
-// Example: Spawn a separate Tokio task to periodically send events into the bus.
-// This demonstrates using the `effect_wright` handle obtained earlier.
+// Example: Spawn a task to periodically send an event
+let periodic_sender = effect_wright.clone(); // Clone handle for the task
 tokio::spawn(async move {
     loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let event_to_send = A {
-            foo: "hello from periodic task".to_string(),
-            bar: Utc::now().timestamp(), // Generate a timestamp
-        };
-        println!("Sending event A: {:?}", event_to_send);
-        // Use the effect_wright handle to emit the event.
-        if let Err(e) = effect_wright.emit(&event_to_send) {
-             eprintln!("Failed to send periodic event: {:?}", e);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let event = Ping { timestamp: 0 }; 
+        if let Err(e) = periodic_sender.emit(&event) {
+            eprintln!("Failed to send periodic event: {:?}", e);
         }
-     }
+    }
 });
 
-// Typically, you would await the handle in your main function
-// to keep the application running.
-// handle.await.await; // This might require handling the result
+// Keep the application alive, e.g., by awaiting the bus handle
+// (Note: bus.run itself might block or return a future to await)
+// bus_handle.await.unwrap(); // Handle potential errors from the bus run
 ```
 
-**Procedure Call**
+## Procedure Call (RPC)
 
-**See The [Examples](https://github.com/BERADQ/ioevent/tree/main/examples/rpc)**
+`ioevent` supports request/response patterns via Procedure Calls. Define procedures similarly to events and use `bus.call()` to invoke them remotely.
 
-## todo
-- [ ] middleware support
-- [ ] custom serializer & deserializer
-- [x] procedure call
+**See the [RPC Examples](https://github.com/BERADQ/ioevent/tree/main/examples/rpc) for details.**
+
+## TODO
+- [ ] Middleware support
+- [ ] Custom serializer & deserializer
+- [x] Procedure call

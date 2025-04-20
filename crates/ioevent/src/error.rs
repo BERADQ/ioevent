@@ -6,7 +6,7 @@ use channels::serdes::Cbor;
 use thiserror::Error;
 use tokio::sync::mpsc;
 
-use crate::event::EventData;
+use crate::{event::EventData, util::CenterError};
 
 /// Errors that can occur during event type conversion.
 ///
@@ -247,6 +247,14 @@ impl<W, R> From<mpsc::error::SendError<EventData>> for BusError<W, R> {
 impl<W, R> From<BusRecvError<R>> for BusError<W, R> {
     fn from(value: BusRecvError<R>) -> Self {
         BusError::BusRecv(value)
+    }
+}
+impl<W, R> From<CenterError<R>> for BusError<W, R> {
+    fn from(value: CenterError<R>) -> Self {
+        match value {
+            CenterError::Left(e) => BusError::SendError(e),
+            CenterError::Right(e) => BusError::BusRecv(e),
+        }
     }
 }
 

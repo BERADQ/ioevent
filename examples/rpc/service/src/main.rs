@@ -11,7 +11,7 @@ use ioevent::{
 use rpc_common::*;
 use tokio::{process::Command, select, time};
 
-// Define subscribers for handling events
+// Define subscribers responsible for handling specific events.
 static SUBSCRIBERS: &[Subscriber<MyState>] = &[create_subscriber!(print_test)];
 
 // Application state with procedure call support
@@ -27,7 +27,8 @@ impl ProcedureCallWright for MyState {
     }
 }
 
-// RPC procedure handling CallPrint request, prints the message and returns a fixed response
+// Procedure implementation for handling 'CallPrint' requests.
+// Prints the received message and returns a predefined response.
 #[procedure]
 async fn print_test(e: CallPrint) -> Result {
     println!("hello procedure");
@@ -37,7 +38,7 @@ async fn print_test(e: CallPrint) -> Result {
 
 #[tokio::main]
 async fn main() {
-    // Initialize subscribers and create a new client process
+    // Initialize subscribers and prepare the client process command.
     let subscribes = Subscribers::init(SUBSCRIBERS);
     let child = Command::new("./rpc-client.exe");
 
@@ -59,7 +60,7 @@ async fn main() {
     // Create application state
     let state = State::new(MyState::default(), effect_wright.clone());
 
-    // Spawn a task to periodically send EmptyEvent
+    // Spawn a background task to periodically emit 'EmptyEvent'.
     let _handle = tokio::spawn(async move {
         loop {
             time::sleep(Duration::from_secs(1)).await;
@@ -68,22 +69,30 @@ async fn main() {
     });
 
     let state_clone = state.clone();
-    // Main event loop for handling events
+    // Spawn the main event processing tasks.
     tokio::spawn(async move {
         loop {
-            let _ = subscribe_ticker.tick(&state_clone).await;
+            let errors = subscribe_ticker.tick(&state_clone).await;
+            // **Important:** Consume the iterator to process all errors.
+            for _ in errors {}
         }
     });
     tokio::spawn(async move {
         loop {
-            let _ = sooter_ticker.tick(&state).await;
+            sooter_ticker.tick(&state).await;
         }
     });
-    // Main event loop combining different tickers
+    // Main event loop processing ticks from various components.
     loop {
         select! {
-            _ = effect_ticker.tick() => {}
-            _ = center_ticker.tick() => {}
+            errors = effect_ticker.tick() => {
+                // **Important:** Consume the iterator to process all effect errors.
+                for _ in errors {}
+            }
+            errors = center_ticker.tick() => {
+                // **Important:** Consume the iterator to process all center errors.
+                for _ in errors {}
+            }
         }
     }
 }

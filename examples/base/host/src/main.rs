@@ -3,7 +3,7 @@ use ioevent::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::{process::Command, select};
 
-// Define subscribers that will handle specific events
+// Define subscribers responsible for handling specific events.
 static SUBSCRIBERS: &[Subscriber<MyState>] =
     &[create_subscriber!(show_b), create_subscriber!(boardcast)];
 
@@ -17,7 +17,7 @@ async fn show_b(event: B) {
     println!("{:?}", event);
 }
 
-// Subscriber that re-emits received events onto the bus
+// Subscriber that re-broadcasts received events to all connected pairs.
 #[subscriber]
 async fn boardcast(s: State<MyState>, event: EventData) -> Result {
     s.bus.emit(&event)?;
@@ -30,7 +30,7 @@ pub struct CallData {}
 
 #[tokio::main]
 async fn main() {
-    // Initialize subscribers and create a new client process
+    // Initialize subscribers and prepare the client process command.
     let subscribes = Subscribers::init(SUBSCRIBERS);
     let child = Command::new("./base-client.exe");
 
@@ -44,10 +44,8 @@ async fn main() {
     // Create application state
     let state = State::new(MyState, effect_wright.clone());
 
-    let handle = bus.run(state, &|errors| {
-        for error in errors {
-            eprintln!("error: {:?}", error);
-        }
+    let handle = bus.run(state, &|error| {
+        eprintln!("[Host] BusError: {:?}", error);
     });
     // Spawn a task to periodically send event A
     tokio::spawn(async move {

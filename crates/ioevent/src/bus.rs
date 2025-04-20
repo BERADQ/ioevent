@@ -18,12 +18,12 @@ use tokio::{
 };
 
 use crate::{
-    error::{BusError, BusRecvError, BusSendError, CallSubscribeError},
+    error::{BusError, BusSendError, CallSubscribeError},
     event::*,
+    util::CenterErrorIter,
 };
 
-pub struct CenterTicker<R>
-{
+pub struct CenterTicker<R> {
     /// Collection of event receivers
     pub rx: Vec<channels::Receiver<EventData, R, Cbor>>,
     pub tx: Vec<tokio::sync::mpsc::UnboundedSender<EventData>>,
@@ -38,7 +38,8 @@ where
     }
     pub async fn tick(
         &mut self,
-    ) -> Result<Vec<tokio::sync::mpsc::error::SendError<EventData>>, BusRecvError<R::Error>> {
+    ) -> CenterErrorIter<impl Iterator<Item = tokio::sync::mpsc::error::SendError<EventData>>, R>
+    {
         let iter = self.rx.iter_mut().map(|a| Box::pin(a.recv()));
         let result = future::select_ok(iter).await;
         match result {
@@ -49,9 +50,9 @@ where
                     results.into_iter().filter_map(Result::err)
                 })
                 .await;
-                Ok(results.collect())
+                CenterErrorIter::Left(results)
             }
-            Err(e) => Err(e.into()),
+            Err(e) => CenterErrorIter::Right(Some(e.into())),
         }
     }
     pub fn new_receiver(&mut self) -> tokio::sync::mpsc::UnboundedReceiver<EventData> {
@@ -60,6 +61,7 @@ where
         rx
     }
 }
+
 /// A ticker that manages event distribution to subscribers.
 ///
 /// Receives events from registered receivers and distributes them to subscribers.
@@ -89,7 +91,7 @@ where
     /// # Cancel Safety
     /// This method is cancel-safe, meaning it can be safely cancelled at any point without
     /// leaving the system in an inconsistent state.
-    pub async fn tick(&mut self, state: &State<T>) -> Vec<CallSubscribeError> {
+    pub async fn tick(&mut self, state: &State<T>) -> impl Iterator<Item = CallSubscribeError> {
         let event = self.rx.recv().await;
         if let Some(event) = event {
             let results = task::unconstrained(async {
@@ -103,7 +105,6 @@ where
         }
         .into_iter()
         .flatten()
-        .collect()
     }
 }
 
@@ -132,8 +133,7 @@ impl SooterTicker {
 /// A ticker that manages event emission to external systems.
 ///
 /// Receives events from the internal state channel and forwards them to registered senders.
-pub struct EffectTicker<W>
-{
+pub struct EffectTicker<W> {
     /// Collection of event senders
     pub tx: Vec<channels::Sender<EventData, W, Cbor>>,
     /// Receiver for events from the internal state channel
@@ -158,7 +158,7 @@ where
     /// # Cancel Safety
     /// This method is cancel-safe, meaning it can be safely cancelled at any point without
     /// leaving the system in an inconsistent state.
-    pub async fn tick(&mut self) -> Vec<BusSendError<W::Error>> {
+    pub async fn tick(&mut self) -> impl Iterator<Item = BusSendError<W::Error>> {
         let event = self.state_rx.recv().await;
         if let Some(event) = event {
             let results = task::unconstrained(async {
@@ -168,10 +168,12 @@ where
                 results
             })
             .await;
-            results.collect()
+            Some(results)
         } else {
-            Vec::new()
+            None
         }
+        .into_iter()
+        .flatten()
     }
 }
 
@@ -237,7 +239,7 @@ where
 {
     pub async fn run<F>(self, state: State<T>, handle_error: &'static F) -> JoinAll<JoinHandle<()>>
     where
-        F: Fn(Vec<BusError<W::Error, R::Error>>) + Send + Sync + 'static,
+        F: Fn(BusError<W::Error, R::Error>) + Send + Sync + 'static,
     {
         let Bus {
             mut center_ticker,
@@ -250,7 +252,7 @@ where
         let handle_subscribe_ticker = tokio::spawn(async move {
             loop {
                 let error = subscribe_ticker.tick(&state_clone).await;
-                handle_error(error.into_iter().map(|e| e.into()).collect());
+                error.map(|e| e.into()).for_each(handle_error);
             }
         });
         let handle_sooter_ticker = tokio::spawn(async move {
@@ -261,17 +263,10 @@ where
         loop {
             select! {
                 errors = effect_ticker.tick() => {
-                    handle_error(errors.into_iter().map(|e|e.into()).collect());
+                    errors.map(|e| e.into()).for_each(handle_error);
                 }
                 errors = center_ticker.tick() => {
-                    match errors {
-                        Ok(errors) => {
-                            handle_error(errors.into_iter().map(|e|e.into()).collect());
-                        }
-                        Err(errors) => {
-                            handle_error(vec![errors.into()]);
-                        }
-                    }
+                    errors.map(|e|e.into()).for_each(handle_error);
                 }
                 _ = tokio::signal::ctrl_c() => {
                     break;

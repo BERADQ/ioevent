@@ -11,7 +11,7 @@ use ioevent::{
 use rpc_common::*;
 use tokio::select;
 
-// Define subscribers for handling events
+// Define subscribers responsible for handling specific events.
 const SUBSCRIBERS: &[Subscriber<MyState>] = &[create_subscriber!(call_print)];
 
 // Application state with procedure call support and counter
@@ -30,7 +30,7 @@ impl ProcedureCallWright for MyState {
 
 #[subscriber]
 async fn call_print(state: State<MyState>, _e: EmptyEvent) -> Result {
-    // Make RPC call to print the current counter value
+    // Initiate an RPC call to the 'CallPrint' procedure with the current counter value.
     let call = state
         .call(&CallPrint(format!(
             "{}",
@@ -38,7 +38,7 @@ async fn call_print(state: State<MyState>, _e: EmptyEvent) -> Result {
         )))
         .await;
 
-    // If call is successful, update the counter with the response value
+    // If the RPC call succeeds, update the counter with the response value.
     if let Ok(call) = call {
         state.counter.fetch_add(call.0, Ordering::Relaxed);
     }
@@ -47,7 +47,7 @@ async fn call_print(state: State<MyState>, _e: EmptyEvent) -> Result {
 
 #[tokio::main]
 async fn main() {
-    // Initialize subscribers and create event bus
+    // Initialize subscribers and configure the event bus builder.
     let subscribes = Subscribers::init(SUBSCRIBERS);
     let mut builder = BusBuilder::new(subscribes);
 
@@ -68,22 +68,30 @@ async fn main() {
     // Create application state
     let state = State::new(MyState::default(), effect_wright);
 
-    // Main event loop for handling events
+    // Spawn the main event processing tasks.
     let state_clone = state.clone();
     tokio::spawn(async move {
         loop {
-            let _ = subscribe_ticker.tick(&state_clone).await;
+            let errors = subscribe_ticker.tick(&state_clone).await;
+            // **Important:** Consume the iterator to process all errors.
+            for _ in errors {}
         }
     });
     tokio::spawn(async move {
         loop {
-            let _ = sooter_ticker.tick(&state).await;
+            sooter_ticker.tick(&state).await;
         }
     });
     loop {
         select! {
-            _ = effect_ticker.tick() => {}
-            _ = center_ticker.tick() => {}
+            errors = effect_ticker.tick() => {
+                // **Important:** Consume the iterator to process all effect errors.
+                for _ in errors {}
+            }
+            errors = center_ticker.tick() => {
+                // **Important:** Consume the iterator to process all center errors.
+                for _ in errors {}
+            }
         }
     }
 }

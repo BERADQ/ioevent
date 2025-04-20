@@ -13,6 +13,6 @@ pub struct B {
     pub bar: String,
 }
 #[derive(Deserialize, Serialize, Debug, Event)]
-// Custom tag
+// Specifies a custom event tag.
 #[event(tag = "com::demo::my::C")]
 pub struct C(pub String, pub i64);
