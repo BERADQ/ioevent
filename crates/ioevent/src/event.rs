@@ -1,7 +1,31 @@
 //! Core event handling module for the I/O event system.
 //!
-//! Provides event data structures, subscriber management, and event matching functionality
-//! for building event-driven systems.
+//! This module provides the fundamental building blocks for event-driven communication:
+//! - Event data structures and serialization
+//! - Event type definitions and matching
+//! - Subscriber management and event routing
+//! - Event conversion and validation
+//!
+//! # Event System Overview
+//! The event system is built around the following key concepts:
+//! - Events are identified by a unique tag and contain CBOR-encoded data
+//! - Subscribers are registered to handle specific event types
+//! - Events can be converted between different representations
+//! - Event matching is performed using selectors
+//!
+//! # Examples
+//! ```rust
+//! use ioevent::prelude::*;
+//! use serde::{Serialize, Deserialize};
+//!
+//! #[derive(Event, Serialize, Deserialize)]
+//! struct UserEvent {
+//!     user_id: u64,
+//!     action: String,
+//! }
+//! ```
+//!
+//! For more examples and detailed usage, see the individual type documentation.
 
 use futures_util::future::join_all;
 use std::{convert::Infallible, ops::Deref};
@@ -9,7 +33,7 @@ use std::{convert::Infallible, ops::Deref};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    bus::state::State,
+    state::State,
     error::{CallSubscribeError, CborValueError, TryFromEventError},
     future::SubscribeFutureRet,
 };
@@ -20,12 +44,26 @@ pub use ciborium::Value;
 pub use ioevent_macro::{Event, subscriber};
 
 /// Raw event data structure containing event identifier and CBOR-encoded data.
+///
+/// This is the fundamental data structure used for event communication.
+/// Events are identified by a string tag and contain arbitrary data encoded in CBOR format.
+///
+/// # Examples
+/// ```rust
+/// use ioevent::event::EventData;
+/// use ciborium::Value;
+///
+/// let event = EventData {
+///     event: "user.login".to_string(),
+///     data: Value::Text("user123".to_string()),
+/// };
+/// ```
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct EventData {
-    /// Event identifier or tag
-    pub event: String,
-    /// Event data in CBOR format
-    pub data: Value,
+    /// Unique identifier for the event type
+    pub tag: String,
+    /// Event payload encoded in CBOR format
+    pub payload: Value,
 }
 
 /// Type alias for any event data
@@ -36,8 +74,21 @@ type SubscribeFn<T> = fn(&State<T>, &EventData) -> SubscribeFutureRet;
 
 /// Event subscriber that processes events matching a specific selector.
 ///
-/// Each subscriber is associated with an event selector and contains a handler function
-/// that processes matching events.
+/// A subscriber consists of:
+/// - An event selector that determines which events to handle
+/// - A handler function that processes matching events
+/// - Type information for the event being handled
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// #[subscriber]
+/// async fn handle_user_event(state: State<()>, event: UserEvent) -> Result {
+///     println!("User event received: {:?}", event);
+///     Ok(())
+/// }
+/// ```
 pub struct Subscriber<T>((), &'static Selector, pub SubscribeFn<T>)
 where
     T: 'static;
@@ -137,18 +188,32 @@ impl From<CborValueError> for TryFromEventError {
 
 /// Trait defining the interface for event types in the system.
 ///
-/// Events must implement this trait to participate in the event system.
-/// Provides serialization, deserialization, and type conversion capabilities.
+/// This trait must be implemented by all event types in the system. It provides:
+/// - A unique tag for event identification
+/// - Serialization and deserialization capabilities
+/// - Type conversion between different event representations
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Event, Serialize, Deserialize)]
+/// struct UserEvent {
+///     user_id: u64,
+///     action: String,
+/// }
+/// ```
 pub trait Event: Serialize + for<'ed> TryFrom<&'ed EventData, Error = TryFromEventError> {
     /// Unique tag identifying this event type
     const TAG: &'static str;
     /// Selector used to match this event type
-    const SELECTOR: Selector = Selector(|x| x.event == Self::TAG);
+    const SELECTOR: Selector = Selector(|x| x.tag == Self::TAG);
     /// Converts the event into its raw EventData representation
     fn upcast(&self) -> Result<EventData, CborValueError> {
         Ok(EventData {
-            event: Self::TAG.to_string(),
-            data: Value::serialized(&self)?,
+            tag: Self::TAG.to_string(),
+            payload: Value::serialized(&self)?,
         })
     }
 }

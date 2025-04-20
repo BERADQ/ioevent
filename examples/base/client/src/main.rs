@@ -12,14 +12,14 @@ struct MyState;
 // Subscriber that handles event A and emits event C
 #[subscriber]
 async fn echo(s: State<MyState>, e: A) -> Result {
-    s.bus.emit(&C(e.foo, e.bar))?;
+    s.wright.emit(&C(e.foo, e.bar))?;
     Ok(())
 }
 
 // Subscriber that handles event C and emits event B
 #[subscriber]
 async fn echo_c<T: Clone>(state: State<T>, event: C) -> Result {
-    state.bus.emit(&B {
+    state.wright.emit(&B {
         foo: event.1,
         bar: event.0,
     })?;

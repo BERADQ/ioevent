@@ -1,11 +1,7 @@
 use std::time::Duration;
 
 use ioevent::{
-    State,
-    bus::state::{
-        DefaultProcedureWright, ProcedureCallExt, ProcedureCallRequest, ProcedureCallWright,
-        procedure,
-    },
+    state::{DefaultProcedureWright, ProcedureCallWright, procedure},
     prelude::*,
 };
 use rpc_common::*;
@@ -52,7 +48,7 @@ async fn main() {
             mut center_ticker,
             mut subscribe_ticker,
             mut effect_ticker,
-            mut sooter_ticker,
+            mut shooter_ticker,
         },
         effect_wright,
     ) = builder.build();
@@ -79,7 +75,7 @@ async fn main() {
     });
     tokio::spawn(async move {
         loop {
-            sooter_ticker.tick(&state).await;
+            shooter_ticker.tick(&state).await;
         }
     });
     // Main event loop processing ticks from various components.

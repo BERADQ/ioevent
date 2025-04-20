@@ -90,7 +90,7 @@ pub fn derive_event(input: TokenStream) -> TokenStream {
         impl #impl_generics TryFrom<&::ioevent::event::EventData> for #name #ty_generics #where_clause {
             type Error = ::ioevent::error::TryFromEventError;
             fn try_from(value: &::ioevent::event::EventData) -> ::core::result::Result<Self, Self::Error> {
-                ::core::result::Result::Ok(value.data.deserialized()?)
+                ::core::result::Result::Ok(value.payload.deserialized()?)
             }
         }
     };
@@ -150,7 +150,7 @@ pub fn subscriber(_attr: TokenStream, item: TokenStream) -> TokenStream {
         (quote! { <#(#raw_generics),*> }, params)
     } else {
         let params = quote! {
-            _state: &::ioevent::bus::state::State<_STATE>,
+            _state: &::ioevent::state::State<_STATE>,
             #event_name: &::ioevent::event::EventData
         };
         (quote! { <#(#raw_generics),* _STATE> }, params)
@@ -285,16 +285,16 @@ pub fn derive_procedure_call(input: TokenStream) -> TokenStream {
     };
 
     let expanded = quote! {
-        impl #impl_generics ::ioevent::bus::state::ProcedureCall for #name #ty_generics #where_clause {
+        impl #impl_generics ::ioevent::state::ProcedureCall for #name #ty_generics #where_clause {
             fn path() -> String {
                 #path_expr.to_owned()
             }
         }
 
-        impl #impl_generics TryFrom<::ioevent::bus::state::ProcedureCallData> for #name #ty_generics #where_clause {
+        impl #impl_generics TryFrom<::ioevent::state::ProcedureCallData> for #name #ty_generics #where_clause {
             type Error = ::ioevent::error::TryFromEventError;
-            fn try_from(value: ::ioevent::bus::state::ProcedureCallData) -> ::core::result::Result<Self, Self::Error> {
-                ::core::result::Result::Ok(value.data.deserialized()?)
+            fn try_from(value: ::ioevent::state::ProcedureCallData) -> ::core::result::Result<Self, Self::Error> {
+                ::core::result::Result::Ok(value.payload.deserialized()?)
             }
         }
     };
@@ -353,14 +353,14 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
         (quote! { <#(#raw_generics),*> }, params)
     } else {
         let params = quote! {
-            _state: &::ioevent::bus::state::State<_STATE>,
+            _state: &::ioevent::state::State<_STATE>,
             #event_name: &::ioevent::event::EventData
         };
-        (quote! { <#(#raw_generics),* _STATE: ::ioevent::bus::state::ProcedureCallWright + ::std::clone::Clone + ::std::marker::Send + ::std::marker::Sync + 'static> }, params)
+        (quote! { <#(#raw_generics),* _STATE: ::ioevent::state::ProcedureCallWright + ::std::clone::Clone + ::std::marker::Send + ::std::marker::Sync + 'static> }, params)
     };
 
     let event_try_into = quote! {
-        let #event_name: ::core::result::Result<::ioevent::bus::state::ProcedureCallData, ::ioevent::error::TryFromEventError> = ::std::convert::TryInto::try_into(#event_name);
+        let #event_name: ::core::result::Result<::ioevent::state::ProcedureCallData, ::ioevent::error::TryFromEventError> = ::std::convert::TryInto::try_into(#event_name);
     };
 
     let state_clone = if let Some((_, state_name)) = state_ty_name {
@@ -379,13 +379,13 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             async move {
                 let #event_name = #event_name?;
-                if <#event_ty as ::ioevent::bus::state::ProcedureCallRequest>::match_self(&#event_name) {
+                if <#event_ty as ::ioevent::state::ProcedureCallRequest>::match_self(&#event_name) {
                     let echo = #event_name.echo;
-                    let #event_name = <#event_ty as ::std::convert::TryFrom<::ioevent::bus::state::ProcedureCallData>>::try_from(#event_name)?;
+                    let #event_name = <#event_ty as ::std::convert::TryFrom<::ioevent::state::ProcedureCallData>>::try_from(#event_name)?;
                     let response: ::core::result::Result<_, ::ioevent::error::CallSubscribeError> = {
                         #(#original_stmts)*
                     };
-                    ::ioevent::bus::state::ProcedureCallExt::resolve::<#event_ty>(&#state_name, echo, &response?).await?;
+                    ::ioevent::state::ProcedureCallExt::resolve::<#event_ty>(&#state_name, echo, &response?).await?;
                 }
                 Ok(())
             }
@@ -394,13 +394,13 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             async move {
                 let #event_name = #event_name?;
-                if <#event_ty as ::ioevent::bus::state::ProcedureCallRequest>::match_self(&#event_name) {
+                if <#event_ty as ::ioevent::state::ProcedureCallRequest>::match_self(&#event_name) {
                     let echo = #event_name.echo;
-                    let #event_name = <#event_ty as ::std::convert::TryFrom<::ioevent::bus::state::ProcedureCallData>>::try_from(#event_name)?;
+                    let #event_name = <#event_ty as ::std::convert::TryFrom<::ioevent::state::ProcedureCallData>>::try_from(#event_name)?;
                     let response: ::core::result::Result<_, ::ioevent::error::CallSubscribeError> = {
                         #(#original_stmts)*
                     };
-                    ::ioevent::bus::state::ProcedureCallExt::resolve::<#event_ty>(&_state, echo, &response?).await?;
+                    ::ioevent::state::ProcedureCallExt::resolve::<#event_ty>(&_state, echo, &response?).await?;
                 }
                 Ok(())
             }
@@ -416,7 +416,7 @@ pub fn procedure(_attr: TokenStream, item: TokenStream) -> TokenStream {
         #[doc(hidden)]
         #vis mod #mod_name {
             use super::*;
-            pub type _Event = ::ioevent::bus::state::ProcedureCallData;
+            pub type _Event = ::ioevent::state::ProcedureCallData;
         }
     };
 

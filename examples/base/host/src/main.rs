@@ -1,7 +1,7 @@
 use base_common::*;
 use ioevent::prelude::*;
 use serde::{Deserialize, Serialize};
-use tokio::{process::Command, select};
+use tokio::process::Command;
 
 // Define subscribers responsible for handling specific events.
 static SUBSCRIBERS: &[Subscriber<MyState>] =
@@ -20,7 +20,7 @@ async fn show_b(event: B) {
 // Subscriber that re-broadcasts received events to all connected pairs.
 #[subscriber]
 async fn boardcast(s: State<MyState>, event: EventData) -> Result {
-    s.bus.emit(&event)?;
+    s.wright.emit(&event)?;
     Ok(())
 }
 

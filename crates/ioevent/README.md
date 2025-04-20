@@ -7,15 +7,13 @@
 
 A lightweight Rust crate for building event-driven applications on top of Tokio's async I/O streams with low overhead. Facilitates decoupled architectures, suitable for inter-process communication or modular designs.
 
-## Features ✨
-- **Event-driven Architecture**: Transforms async I/O operations into unified event streams.
-- **Tokio Integration**: Built upon and integrates seamlessly with Tokio's async runtime.
-- **Extensibility**: Supports custom event types and dynamic handler registration.
-- **Bi-directional Communication**: Enables event emission and response handling through Procedure Calls.
+## Features
+- **Event-driven Architecture**: Transforms async I/O operations into unified event streams
+- **Tokio Integration**: Built upon and integrates seamlessly with Tokio's async runtime
+- **Extensibility**: Supports custom event types and dynamic handler registration
+- **Bi-directional Communication**: Enables event emission and response handling through Procedure Calls
 
-## Usage 🚀
-
-Refer to the [Examples](https://github.com/BERADQ/ioevent/tree/main/examples) directory for complete code samples.
+## Quick
 
 **1. Define Events**
 
@@ -25,11 +23,11 @@ Events are simple structs or enums implementing `serde::Serialize`, `serde::Dese
 use serde::{Deserialize, Serialize};
 use ioevent::prelude::*;
 
-// Example events (similar to examples/base/common)
 #[derive(Deserialize, Serialize, Debug, Event)]
 pub struct Ping {
     pub timestamp: i64,
 }
+
 #[derive(Deserialize, Serialize, Debug, Event)]
 pub struct Pong {
     pub timestamp: i64,
@@ -43,118 +41,159 @@ Subscribers are async functions that handle specific event types. Use the `#[sub
 ```rust
 use ioevent::prelude::*;
 
-// Define an application state (optional)
 #[derive(Clone)]
-struct AppState { /* ... fields needed by subscribers ... */ }
+struct AppState {
+    // Your application state
+}
 
-// Subscriber functions (similar to examples/base/host)
 #[subscriber]
 async fn handle_ping(state: State<AppState>, event: Ping) -> Result {
-    // println!("Received Ping: {:?}", event);
-    // Respond with a Pong event using the bus handle from the state
     let pong = Pong { timestamp: event.timestamp };
-    state.bus.emit(&pong)?;
+    state.wright.emit(&pong)?;
     Ok(())
 }
 
 #[subscriber]
-async fn log_event(event: EventData) { // Receives any event
-    println!("Logged Event Tag: {:?}", event.tag());
+async fn log_all_event(event: EventData) {
+    eprintln!("Event received: {:?}", event);
 }
 
-// Collect subscribers into a static slice
 static SUBSCRIBERS: &[Subscriber<AppState>] = &[
     create_subscriber!(handle_ping),
-    create_subscriber!(log_event),
+    create_subscriber!(log_all_event),
 ];
 ```
 
 **3. Build the Event Bus**
 
-Use `BusBuilder` to configure and create the event bus, adding communication pairs (e.g., `stdio` or child process I/O).
+Use `BusBuilder` to configure and create the event bus.
 
 ```rust
-use tokio::process::Command;
 use ioevent::prelude::*;
 
-fn setup_bus() -> (Bus<AppState>, EffectWright<AppState>) {
+fn setup_bus() -> (Bus<AppState>, EffectWright) {
     let subscribers = Subscribers::init(SUBSCRIBERS);
     let mut builder = BusBuilder::new(subscribers);
-
-    // Example 1: Standard Input/Output (common for client/server)
-    // builder.add_pair(IoPair::stdio());
-
-    // Example 2: Child Process Communication (host example)
-    let mut child_cmd = Command::new("path/to/your/client/executable"); // Adjust path
-    // Configure stdin/stdout redirection as needed for Command
-    // ...
-    if let Ok(pair) = IoPair::try_from(child_cmd) {
-         builder.add_pair(pair);
-    } else {
-        eprintln!("Failed to create child process pair");
-    }
-
-
-    // Build the bus and get the effect handle
+    
+    // Add I/O pairs
+    builder.add_pair(IoPair::stdio());
+    
     builder.build()
 }
 ```
 
-**4. Create State (if needed)**
+**4. Run the Bus**
 
-Instantiate your application state and associate it with the `EffectWright` handle obtained from `builder.build()`.
-
-```rust
-use ioevent::State; // Assuming AppState and effect_wright are defined
-
-let (bus, effect_wright) = setup_bus().await; // Assuming setup_bus is defined
-let state = State::new(AppState { /* ... initial state ... */ }, effect_wright.clone());
-```
-
-**5. Run the Bus**
-
-Start the event processing loop using `bus.run()`. Provide the application state and an error handler.
+Start the event processing loop using `bus.run()`.
 
 ```rust
-use ioevent::{Error, Result};
+use ioevent::prelude::*;
 use std::time::Duration;
 
-// Assuming bus, state, effect_wright are defined
-// Define an error handler closure
-let error_handler = |errors: Vec<Error>| {
-    for error in errors {
+#[tokio::main]
+async fn main() {
+    let (bus, effect_wright) = setup_bus();
+    let state = State::new(AppState {}, effect_wright.clone());
+    
+    // Error handler
+    let error_handler = |error: BusError| {
         eprintln!("Bus Error: {:?}", error);
-        // Add more robust error handling/logging as needed
-    }
-};
-
-// Run the event bus (typically runs indefinitely)
-let bus_handle = bus.run(state, &error_handler);
-
-// Example: Spawn a task to periodically send an event
-let periodic_sender = effect_wright.clone(); // Clone handle for the task
-tokio::spawn(async move {
-    loop {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        let event = Ping { timestamp: 0 }; 
-        if let Err(e) = periodic_sender.emit(&event) {
-            eprintln!("Failed to send periodic event: {:?}", e);
+    };
+    
+    // Run the bus
+    let bus_handle = bus.run(state, &error_handler);
+    
+    // Example: Send periodic events
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let event = Ping { timestamp: 0 };
+            if let Err(e) = effect_wright.emit(&event) {
+                eprintln!("Failed to send event: {:?}", e);
+            }
         }
-    }
-});
-
-// Keep the application alive, e.g., by awaiting the bus handle
-// (Note: bus.run itself might block or return a future to await)
-// bus_handle.await.unwrap(); // Handle potential errors from the bus run
+    });
+    
+    bus_handle.await;
+}
 ```
 
 ## Procedure Call (RPC)
 
-`ioevent` supports request/response patterns via Procedure Calls. Define procedures similarly to events and use `bus.call()` to invoke them remotely.
+`ioevent` supports request/response patterns via Procedure Calls. Here's how to implement RPC:
 
-**See the [RPC Examples](https://github.com/BERADQ/ioevent/tree/main/examples/rpc) for details.**
+1. Define the procedure call types:
 
-## TODO
-- [ ] Middleware support
-- [ ] Custom serializer & deserializer
-- [x] Procedure call
+```rust
+use ioevent::rpc::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize, Debug, ProcedureCall)]
+// By optional: custom the path
+#[procedure(path = "com::demo::my::CallPrint")]
+pub struct CallPrint(pub String);
+impl ProcedureCallRequest for CallPrint {
+    type RESPONSE = CallPrintResponse;
+}
+
+#[derive(Deserialize, Serialize, Debug, ProcedureCall)]
+pub struct CallPrintResponse(pub u64);
+impl ProcedureCallResponse for CallPrintResponse {}
+```
+
+2. Implement the procedure handler:
+
+```rust
+use ioevent::prelude::*;
+
+#[derive(Clone, Default)]
+struct MyState {
+    pdc_wright: DefaultProcedureWright,
+}
+
+impl ProcedureCallWright for MyState {
+    async fn next_echo(&self) -> u64 {
+        self.pdc_wright.next_echo().await
+    }
+}
+
+#[procedure]
+async fn print_test(e: CallPrint) -> Result {
+    println!("Received message: {}", e.0);
+    Ok(CallPrintResponse(42))
+}
+```
+
+3. Make RPC calls from the client:
+
+```rust
+use ioevent::prelude::*;
+
+#[derive(Clone, Default)]
+struct MyState {
+    pdc_wright: DefaultProcedureWright,
+    counter: Arc<AtomicU64>,
+}
+
+impl ProcedureCallWright for MyState {
+    async fn next_echo(&self) -> u64 {
+        self.pdc_wright.next_echo().await
+    }
+}
+
+#[subscriber]
+async fn call_print(state: State<MyState>, _e: EmptyEvent) -> Result {
+    let call = state
+        .call(&CallPrint(format!("Counter: {}", state.counter.load(Ordering::Relaxed))))
+        .await;
+
+    if let Ok(response) = call {
+        state.counter.fetch_add(response.0, Ordering::Relaxed);
+    }
+    Ok(())
+}
+```
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

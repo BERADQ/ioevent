@@ -5,7 +5,7 @@ use std::sync::{
 
 use ioevent::{
     State,
-    bus::state::{DefaultProcedureWright, ProcedureCallExt, ProcedureCallWright},
+    state::{DefaultProcedureWright, ProcedureCallExt, ProcedureCallWright},
     prelude::*,
 };
 use rpc_common::*;
@@ -60,7 +60,7 @@ async fn main() {
             mut center_ticker,
             mut subscribe_ticker,
             mut effect_ticker,
-            mut sooter_ticker,
+            mut shooter_ticker,
         },
         effect_wright,
     ) = builder.build();
@@ -79,7 +79,7 @@ async fn main() {
     });
     tokio::spawn(async move {
         loop {
-            sooter_ticker.tick(&state).await;
+            shooter_ticker.tick(&state).await;
         }
     });
     loop {

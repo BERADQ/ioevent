@@ -1,6 +1,33 @@
 //! Error handling module for the I/O event system.
 //!
-//! Defines error types for event handling, conversion, and procedure calls.
+//! This module defines comprehensive error types for handling various failure cases in the event system:
+//! - Event type conversion errors
+//! - Event subscription and procedure call errors
+//! - Event sending and receiving errors
+//! - Bus communication errors
+//!
+//! # Error Hierarchy
+//! The error system is organized into several main categories:
+//! - [`TryFromEventError`]: Errors during event type conversion
+//! - [`CallSubscribeError`]: Errors during event subscription and procedure calls
+//! - [`BusSendError`]: Errors during event sending
+//! - [`BusRecvError`]: Errors during event receiving
+//! - [`BusError`]: General bus communication errors
+//!
+//! # Examples
+//! ```rust
+//! use ioevent::prelude::*;
+//!
+//! // Handling event conversion errors
+//! match event.try_into() {
+//!     Ok(event) => process_event(event),
+//!     Err(TryFromEventError::Deserialize(e)) => handle_deserialize_error(e),
+//!     Err(TryFromEventError::TagError(expected, actual)) => handle_tag_mismatch(expected, actual),
+//!     Err(e) => handle_other_error(e),
+//! }
+//! ```
+//!
+//! For more examples and detailed error handling patterns, see the individual error type documentation.
 
 use channels::serdes::Cbor;
 use thiserror::Error;
@@ -11,10 +38,26 @@ use crate::{event::EventData, util::CenterError};
 /// Errors that can occur during event type conversion.
 ///
 /// This enum represents various failure cases when converting between event types:
-/// * Deserialization errors
-/// * Tag mismatches
-/// * Invalid event formats
-/// * Infallible conversion errors
+/// - Deserialization errors from CBOR data
+/// - Tag mismatches between expected and actual event types
+/// - Invalid event formats
+/// - Infallible conversion errors
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// match event.try_into() {
+///     Ok(event) => process_event(event),
+///     Err(TryFromEventError::Deserialize(e)) => {
+///         eprintln!("Failed to deserialize event: {}", e);
+///     }
+///     Err(TryFromEventError::TagError(expected, actual)) => {
+///         eprintln!("Event tag mismatch: expected {}, got {}", expected, actual);
+///     }
+///     Err(e) => handle_other_error(e),
+/// }
+/// ```
 #[derive(Debug, Error)]
 pub enum TryFromEventError {
     /// Error during event data deserialization
@@ -46,9 +89,27 @@ impl From<String> for TryFromEventError {
 
 /// Errors that can occur during event subscription and procedure calls.
 ///
-/// This enum represents various errors that can occur when subscribing to events
-/// or making procedure calls, including conversion errors, send errors, and
-/// general procedure call errors.
+/// This enum represents various errors that can occur when:
+/// - Subscribing to events
+/// - Making procedure calls
+/// - Converting between event types
+/// - Sending events through channels
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// match subscribe_to_event() {
+///     Ok(()) => println!("Successfully subscribed"),
+///     Err(CallSubscribeError::TryFrom(e)) => {
+///         eprintln!("Failed to convert event: {}", e);
+///     }
+///     Err(CallSubscribeError::SendEvent(e)) => {
+///         eprintln!("Failed to send event: {}", e);
+///     }
+///     Err(e) => handle_other_error(e),
+/// }
+/// ```
 #[derive(Debug, Error)]
 pub enum CallSubscribeError {
     /// An error occurred during event conversion
@@ -147,8 +208,24 @@ type CborSeError = <Cbor as channels::serdes::Serializer<EventData>>::Error;
 
 /// Errors that can occur when sending events through the bus.
 ///
-/// This enum represents errors that can occur during event sending,
-/// including serialization errors and channel send errors.
+/// This enum represents errors that can occur during event sending:
+/// - Channel send errors
+/// - Event serialization errors
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// match bus.send_event(&event) {
+///     Ok(()) => println!("Event sent successfully"),
+///     Err(BusSendError::Send(e)) => {
+///         eprintln!("Failed to send event through channel: {}", e);
+///     }
+///     Err(BusSendError::Serialize(e)) => {
+///         eprintln!("Failed to serialize event: {}", e);
+///     }
+/// }
+/// ```
 #[derive(Debug, Error)]
 pub enum BusSendError<W> {
     /// An error occurred while sending data through the channel
@@ -187,13 +264,33 @@ type CborDeError = <Cbor as channels::serdes::Deserializer<EventData>>::Error;
 
 /// Errors that can occur when receiving events through the bus.
 ///
-/// This enum represents errors that can occur during event reception,
-/// including channel receive errors.
+/// This enum represents errors that can occur during event reception:
+/// - Channel receive errors
+/// - Broadcast receive errors
+/// - Broadcast send errors
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// match bus.receive_event() {
+///     Ok(event) => process_event(event),
+///     Err(BusRecvError::Recv(e)) => {
+///         eprintln!("Failed to receive event: {}", e);
+///     }
+///     Err(BusRecvError::BoardcastRecv(e)) => {
+///         eprintln!("Failed to receive broadcast: {}", e);
+///     }
+///     Err(e) => handle_other_error(e),
+/// }
+/// ```
 #[derive(Debug, Error)]
 pub enum BusRecvError<R> {
     /// An error occurred while receiving data through the channel
     Recv(channels::error::RecvError<CborDeError, R>),
+    /// An error occurred while receiving a broadcast
     BoardcastRecv(tokio::sync::broadcast::error::RecvError),
+    /// An error occurred while sending a broadcast
     BoardcastSend(tokio::sync::broadcast::error::SendError<EventData>),
 }
 
