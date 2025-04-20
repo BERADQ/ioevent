@@ -37,13 +37,10 @@ use channels::{
     io::{AsyncRead, AsyncWrite, IntoRead, IntoWrite},
     serdes::Cbor,
 };
-use futures::{
-    FutureExt,
-    future::{self, BoxFuture, JoinAll, join_all},
-};
+use futures::future::{self, join_all};
 use tokio::{
-    pin, select,
-    sync::{broadcast, oneshot},
+    select,
+    sync::broadcast,
     task::{self, JoinHandle},
 };
 use tokio_util::sync::CancellationToken;
@@ -384,9 +381,16 @@ where
             }
         };
         CloseHandle {
-            close_signal,
+            close_signal: CloseSignal(close_signal),
             future: future,
         }
+    }
+}
+
+pub struct CloseSignal(broadcast::Sender<()>);
+impl CloseSignal {
+    pub fn close(self) {
+        self.0.send(()).unwrap();
     }
 }
 
@@ -394,19 +398,22 @@ pub struct CloseHandle<F>
 where
     F: Future<Output = ()>,
 {
-    close_signal: broadcast::Sender<()>,
-    future: F,
+    pub close_signal: CloseSignal,
+    pub future: F,
 }
 impl<F> CloseHandle<F>
 where
-    F: Future<Output = ()>,
+    F: Future<Output = ()> + Send + Sync + 'static,
 {
     pub async fn close(self) {
-        self.close_signal.send(()).unwrap();
+        self.close_signal.close();
         self.future.await;
     }
     pub async fn join(self) {
         self.future.await
+    }
+    pub fn spawn(self) -> (JoinHandle<()>, CloseSignal) {
+        (tokio::spawn(self.future), self.close_signal)
     }
 }
 

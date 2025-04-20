@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use ioevent::{
-    state::{DefaultProcedureWright, ProcedureCallWright, procedure},
     prelude::*,
+    state::{DefaultProcedureWright, ProcedureCallWright, procedure},
 };
 use rpc_common::*;
-use tokio::{process::Command, select, time};
+use tokio::{process::Command, time};
 
 // Define subscribers responsible for handling specific events.
 static SUBSCRIBERS: &[Subscriber<MyState>] = &[create_subscriber!(print_test)];
@@ -43,15 +43,7 @@ async fn main() {
     builder.add_pair(child.try_into().unwrap());
 
     // Initialize the event bus components
-    let (
-        Bus {
-            mut center_ticker,
-            mut subscribe_ticker,
-            mut effect_ticker,
-            mut shooter_ticker,
-        },
-        effect_wright,
-    ) = builder.build();
+    let (bus, effect_wright) = builder.build();
 
     // Create application state
     let state = State::new(MyState::default(), effect_wright.clone());
@@ -64,34 +56,10 @@ async fn main() {
         }
     });
 
-    let state_clone = state.clone();
-    // Spawn the main event processing tasks.
-    tokio::spawn(async move {
-        loop {
-            let errors = subscribe_ticker.tick(&state_clone).await;
-            // **Important:** Consume the iterator to process all errors.
-            for _ in errors {}
-        }
-    });
-    tokio::spawn(async move {
-        loop {
-            shooter_ticker.tick(&state).await;
-        }
-    });
-    // Main event loop processing ticks from various components.
-    loop {
-        select! {
-            errors = effect_ticker.tick() => {
-                // **Important:** Consume the iterator to process all effect errors.
-                for _ in errors {}
-            }
-            errors = center_ticker.tick() => {
-                // **Important:** Consume the iterator to process all center errors.
-                for _ in errors {}
-            }
-            _ = tokio::signal::ctrl_c() => {
-                break;
-            }
-        }
-    }
+    bus.run(state, &|e| {
+        eprintln!("{:?}", e);
+    })
+    .await
+    .join()
+    .await;
 }
