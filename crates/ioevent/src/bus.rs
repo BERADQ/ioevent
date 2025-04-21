@@ -30,7 +30,7 @@
 //!
 //! For more detailed examples and usage patterns, see the individual component documentation.
 
-use std::mem;
+use std::{mem, pin::Pin, task::{Context, Poll}};
 
 use crate::state::State;
 use channels::{
@@ -150,16 +150,28 @@ where
     /// - `Err(BusRecvError<R::Error>)`: If all receivers failed to receive an event.
     ///
     /// # Cancel Safety
-    /// This method is cancel-safe, meaning it can be safely cancelled at any point without
-    /// leaving the system in an inconsistent state.
-    pub async fn tick(&mut self, state: &State<T>) -> impl Iterator<Item = CallSubscribeError> {
+    /// This method is NOT! cancel-safe.
+    pub async fn tick(
+        &mut self,
+        state: &State<T>,
+    ) -> impl Iterator<Item = CallSubscribeError> + Send + 'static {
         let event = self.rx.recv().await;
         if let Some(event) = event {
-            let results = task::unconstrained(async {
-                let results = self.subs.emit(state, &event).await;
-                results
-            })
-            .await;
+            let results = self.subs.emit(state, &event).await;
+            Some(results)
+        } else {
+            None
+        }
+        .into_iter()
+        .flatten()
+    }
+    pub async fn try_tick(
+        &mut self,
+        state: &State<T>,
+    ) -> impl Iterator<Item = CallSubscribeError> + Send + 'static {
+        let event = self.rx.try_recv();
+        if let Ok(event) = event {
+            let results = self.subs.emit(state, &event).await;
             Some(results)
         } else {
             None
@@ -325,8 +337,8 @@ where
 impl<T, W, R> Bus<T, W, R>
 where
     T: Clone + Send + Sync + 'static,
-    W: AsyncWrite + Unpin,
-    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + 'static,
+    R: AsyncRead + Unpin + 'static,
 {
     pub async fn run<F>(
         self,
@@ -347,7 +359,7 @@ where
         } = self;
         let state_clone = state.clone();
         let token_clone = token.clone();
-        let handle_subscribe_ticker = tokio::spawn(async move {
+        let handle_subscribe_ticker = tokio::spawn(UnsafeSendFuture(async move {
             loop {
                 if token_clone.is_cancelled() {
                     break;
@@ -355,14 +367,16 @@ where
                 let error = subscribe_ticker.tick(&state_clone).await;
                 error.map(|e| e.into()).for_each(handle_error);
             }
-        });
+        }));
+
+        let state_clone = state.clone();
         let token_clone = token.clone();
         let handle_shooter_ticker = tokio::spawn(async move {
             loop {
                 if token_clone.is_cancelled() {
                     break;
                 }
-                shooter_ticker.tick(&state).await;
+                shooter_ticker.tick(&state_clone).await;
             }
         });
         let future = async move {
@@ -376,8 +390,8 @@ where
                     }
                     _ = close_signal_receiver.recv() => {
                         token.cancel();
-                        handle_subscribe_ticker.abort();
                         handle_shooter_ticker.abort();
+                        handle_subscribe_ticker.abort();
                         break;
                     }
                 }
@@ -385,7 +399,7 @@ where
         };
         CloseHandle {
             close_signal: CloseSignal(close_signal),
-            future: future,
+            future,
         }
     }
 }
@@ -406,7 +420,7 @@ where
 }
 impl<F> CloseHandle<F>
 where
-    F: Future<Output = ()> + Send + Sync + 'static,
+    F: Future<Output = ()> + Send + 'static,
 {
     pub async fn close(self) {
         self.close_signal.close();
@@ -596,3 +610,16 @@ where
         )
     }
 }
+
+struct UnsafeSendFuture<F: Future>(F);
+
+impl<F: Future> Future for UnsafeSendFuture<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let inner_future = unsafe { self.map_unchecked_mut(|s| &mut s.0) };
+        inner_future.poll(cx)
+    }
+}
+
+unsafe impl<F: Future> Send for UnsafeSendFuture<F> {}

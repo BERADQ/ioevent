@@ -127,7 +127,7 @@ impl<T> Subscriber<T> {
         event: &EventData,
     ) -> Result<(), CallSubscribeError> {
         if self.1.match_event(event) {
-            tokio::task::unconstrained((*self)(state, event)).await
+            (*self)(state, event).await
         } else {
             Ok(())
         }
@@ -168,9 +168,9 @@ where
         &self,
         state: &State<T>,
         event: &EventData,
-    ) -> impl Iterator<Item = CallSubscribeError> + use<T> {
+    ) -> impl Iterator<Item = CallSubscribeError> + use<T> + Send + 'static {
         let futures = self.0.iter().map(|sub| sub.try_call(state, event));
-        tokio::task::unconstrained(join_all(futures)).await.into_iter().filter_map(|v| v.err())
+        join_all(futures).await.into_iter().filter_map(|v| v.err())
     }
 }
 

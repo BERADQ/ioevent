@@ -40,7 +40,7 @@ use crate::error::CallSubscribeError;
 ///     })
 /// }
 /// ```
-pub type FutureRet<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+pub type FutureRet<T> = Pin<Box<dyn Future<Output = T>>>;
 
 /// A future that returns a result from event subscription.
 ///
