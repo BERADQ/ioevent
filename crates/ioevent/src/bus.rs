@@ -37,7 +37,7 @@ use channels::{
     io::{AsyncRead, AsyncWrite, IntoRead, IntoWrite},
     serdes::Cbor,
 };
-use futures::future::{self, join_all};
+use futures::future::{self, join_all, pending};
 use tokio::{
     select,
     sync::broadcast,
@@ -83,6 +83,9 @@ where
         &mut self,
     ) -> CenterErrorIter<impl Iterator<Item = tokio::sync::mpsc::error::SendError<EventData>>, R>
     {
+        if self.rx.is_empty() {
+            pending::<()>().await;
+        }
         let iter = self.rx.iter_mut().map(|a| Box::pin(a.recv()));
         let result = future::select_ok(iter).await;
         match result {
