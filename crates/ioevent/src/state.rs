@@ -495,7 +495,7 @@ pub trait ProcedureCallWright {
     ///
     /// # Returns
     /// A future that resolves to a unique echo identifier
-    fn next_echo(&self) -> impl Future<Output = u64> + Send;
+    fn next_echo(&self) -> impl Future<Output = u64> + Send + Sync;
 }
 
 impl ProcedureCallWright for DefaultProcedureWright {
