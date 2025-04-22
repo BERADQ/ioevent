@@ -1,7 +1,7 @@
 use base_common::*;
 use ioevent::prelude::*;
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
+use tokio::{process::Command, select};
 
 // Define subscribers responsible for handling specific events.
 static SUBSCRIBERS: &[Subscriber<MyState>] =
@@ -60,5 +60,15 @@ async fn main() {
                 .unwrap();
         }
     });
-    handle.await.join().await;
+    let (handle, close_signal) = handle.await.spawn();
+    loop {
+        select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("Ctrl+C pressed, closing host");
+                close_signal.close();
+                break;
+            }
+        }
+    }
+    handle.await.unwrap();
 }
