@@ -396,6 +396,8 @@ where
                         token.cancel();
                         handle_shooter_ticker.abort();
                         handle_subscribe_ticker.abort();
+                        drop(handle_shooter_ticker);
+                        drop(handle_subscribe_ticker);
                         break;
                     }
                 }
@@ -614,7 +616,6 @@ where
         )
     }
 }
-
 struct UnsafeSendFuture<F: Future>(F);
 
 impl<F: Future> Future for UnsafeSendFuture<F> {
@@ -627,3 +628,4 @@ impl<F: Future> Future for UnsafeSendFuture<F> {
 }
 
 unsafe impl<F: Future> Send for UnsafeSendFuture<F> {}
+
