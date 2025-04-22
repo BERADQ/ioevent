@@ -394,8 +394,6 @@ where
                     }
                     _ = close_signal_receiver.recv() => {
                         token.cancel();
-                        handle_shooter_ticker.abort();
-                        handle_subscribe_ticker.abort();
                         drop(handle_shooter_ticker);
                         drop(handle_subscribe_ticker);
                         break;
