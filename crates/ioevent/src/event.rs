@@ -242,7 +242,7 @@ pub struct Selector(pub fn(&EventData) -> bool);
 
 impl Selector {
     /// Checks if the given event matches this selector's criteria
-    fn match_event(&self, event: &EventData) -> bool {
+    pub fn match_event(&self, event: &EventData) -> bool {
         (self.0)(event)
     }
 }

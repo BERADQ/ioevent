@@ -31,6 +31,7 @@
 
 use std::{collections::HashMap, hash::Hash, ops::Deref, sync::Arc};
 
+use futures::FutureExt;
 use rand::{RngCore, SeedableRng, rngs::SmallRng};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, oneshot};
@@ -51,10 +52,13 @@ pub use ioevent_macro::{ProcedureCall, procedure};
 /// with a oneshot channel for sending the selected events.
 pub struct EventShooter {
     /// Function that determines whether an event should be emitted
-    pub selector: Box<dyn Fn(&EventData) -> bool + Send + Sync + 'static>,
+    selector: Box<dyn Fn(&EventData) -> Option<*const ()> + Send + Sync + 'static>,
     /// Channel for sending selected events
-    pub shooter: oneshot::Sender<EventData>,
+    shooter: oneshot::Sender<*const ()>,
 }
+
+unsafe impl Send for EventShooter {}
+unsafe impl Sync for EventShooter {}
 
 impl EventShooter {
     /// Creates a new EventShooter with the specified selector function.
@@ -66,41 +70,79 @@ impl EventShooter {
     /// A tuple containing:
     /// * The EventShooter instance
     /// * A oneshot receiver that will receive the selected events
-    pub fn create_with_selector(
-        selector: Box<dyn Fn(&EventData) -> bool + Send + Sync + 'static>,
-    ) -> (Self, oneshot::Receiver<EventData>) {
+    pub fn create_with_selector<F, T>(
+        selector: F,
+    ) -> (
+        Self,
+        impl Future<Output = Result<T, oneshot::error::RecvError>>,
+    )
+    where
+        F: Fn(&EventData) -> Option<T> + Send + Sync + 'static,
+        T: Send + 'static,
+    {
         let (shooter, receiver) = oneshot::channel();
-        (Self { selector, shooter }, receiver)
+        (
+            Self {
+                selector: Box::new(move |event_data: &EventData| match selector(event_data) {
+                    Some(value_t) => {
+                        let boxed_t = Box::new(value_t);
+                        let raw_ptr = Box::into_raw(boxed_t);
+                        Some(raw_ptr as *const ())
+                    }
+                    None => None,
+                }),
+                shooter,
+            },
+            receiver.map(|recv_result| {
+                recv_result.map(|ptr| {
+                    let raw_ptr = ptr as *mut T;
+                    // Safety: This ptr was originally created from a Box<T> of the correct type T
+                    //         and sent through the channel. Ownership is transferred here.
+                    //         The channel ensures sends/receives happen across threads safely if needed.
+                    unsafe { *Box::from_raw(raw_ptr) }
+                })
+            }),
+        )
     }
     /// Attempts to emit an event if it matches the selector.
+    ///
+    /// If the selector returns `Some`, the event is sent through the channel,
+    /// consuming the `EventShooter`. If the selector returns `None`, the
+    /// `EventShooter` is returned unchanged.
     ///
     /// # Arguments
     /// * `event` - The event to potentially emit
     ///
     /// # Returns
-    /// * `None` - If the event was emitted
-    /// * `Some(self)` - If the event was not emitted (the selector didn't match)
+    /// * `None` - If the event was emitted and the shooter was consumed.
+    /// * `Some(self)` - If the event was not emitted (the selector didn't match).
     pub fn try_dispatch(self, event: &EventData) -> Option<Self> {
-        if (self.selector)(event) {
-            unsafe { self.force_dispatch(event) };
-            None
-        } else {
-            Some(self)
+        let event = (self.selector)(event);
+        match event {
+            Some(event) => {
+                // force_dispatch consumes self, so we don't need to worry about dropping it.
+                // The bool return indicates success/failure of the send.
+                unsafe { self.force_dispatch(event) };
+                None
+            }
+            None => Some(self),
         }
     }
-    /// Emits an event through the oneshot channel.
+    /// Emits an event through the oneshot channel, consuming the shooter.
     ///
     /// # Safety
     /// This method is marked unsafe because it bypasses the selector check.
-    /// The caller must ensure that the event is appropriate for emission.
+    /// The caller must ensure that the provided `event_ptr` is valid, originates
+    /// from `Box::into_raw`, and corresponds to the type expected by the receiver.
+    /// Calling this method consumes the `EventShooter`.
     ///
     /// # Arguments
-    /// * `event` - The event to emit
+    /// * `event_ptr` - The pointer to the event data to emit (must be from `Box::into_raw`).
     ///
     /// # Returns
-    /// `true` if the event was successfully sent, `false` otherwise
-    pub unsafe fn force_dispatch(self, event: &EventData) -> bool {
-        self.shooter.send(event.clone()).is_ok()
+    /// `true` if the event was successfully sent, `false` otherwise (e.g., if the receiver was dropped).
+    unsafe fn force_dispatch(self, event_ptr: *const ()) -> bool {
+        self.shooter.send(event_ptr).is_ok()
     }
 }
 /// The state of the bus, used for collecting and managing side effects.
@@ -137,35 +179,31 @@ impl<T> State<T> {
             event_shooters: Arc::new(Mutex::new(Vec::new())),
         }
     }
-    /// Waits for the next event of a specific type.
-    ///
-    /// # Arguments
-    /// * `E` - The type of event to wait for
-    ///
-    /// # Returns
-    /// * `Ok(E)` - The received event
-    /// * `Err(CallSubscribeError)` - If there was an error receiving or converting the event
-    pub async fn wait_next<E>(&self) -> Result<E, CallSubscribeError>
-    where
-        E: Event,
-    {
-        let event = self.wait_next_with(E::SELECTOR.0).await;
-        let event = event.await?;
-        Ok(E::try_from(&event)?)
-    }
     /// Waits for the next event that matches the specified selector function.
     ///
+    /// This method creates an `EventShooter` with the given `selector`,
+    /// adds it to the internal queue, and returns a future that will
+    /// resolve when a matching event is dispatched to the shooter.
+    ///
     /// # Arguments
-    /// * `selector` - A function that determines which events to accept
+    /// * `selector` - A function that takes an `EventData` and returns `Some(E)`
+    ///                if the event matches, or `None` otherwise.
     ///
     /// # Returns
-    /// * `Ok(EventData)` - The received event data
-    /// * `Err(CallSubscribeError)` - If there was an error receiving the event
-    pub async fn wait_next_with<F>(&self, selector: F) -> oneshot::Receiver<EventData>
+    /// An `impl Future` that resolves to:
+    /// * `Ok(E)` - The value extracted by the `selector` from the matching event.
+    /// * `Err(oneshot::error::RecvError)` - If the sending side of the internal
+    ///                                      channel is dropped before an event is sent
+    ///                                      (e.g., if the `State` is dropped).
+    pub async fn wait_next<F, E>(
+        &self,
+        selector: F,
+    ) -> impl Future<Output = Result<E, oneshot::error::RecvError>>
     where
-        F: Fn(&EventData) -> bool + Send + Sync + 'static,
+        F: for<'a> Fn(&'a EventData) -> Option<E> + Send + Sync + 'static,
+        E: Send + 'static,
     {
-        let (shoot, rx) = EventShooter::create_with_selector(Box::new(selector));
+        let (shoot, rx) = EventShooter::create_with_selector(selector);
         self.event_shooters.lock().await.push(shoot);
         rx
     }
@@ -201,20 +239,22 @@ pub fn encode_procedure_call(path: &str, echo: u64, r#type: ProcedureCallType) -
 /// * `Err(String)` - If the string is not a valid procedure call
 pub fn decode_procedure_call(path: &str) -> Result<(String, u64, ProcedureCallType), String> {
     let parts: Vec<&str> = path.split("\u{0000}|").collect();
-    if parts.len() != 4 {
-        return Err("Invalid procedure call path".to_string());
+    if parts.len() != 4 || parts[0] != "internal.ProcedureCall" {
+        return Err("Invalid procedure call path format".to_string());
     }
     let path = parts[1].to_string();
-    let echo = parts[3].parse().map_err(|_| "Invalid echo".to_string())?;
+    let echo = parts[3]
+        .parse()
+        .map_err(|_| "Invalid echo format".to_string())?;
     let r#type = match parts[2] {
         "?echo=" => ProcedureCallType::Request,
         "!echo=" => ProcedureCallType::Response,
-        _ => return Err("Invalid procedure call path".to_string()),
+        _ => return Err("Invalid procedure call type indicator".to_string()),
     };
     Ok((path, echo, r#type))
 }
 /// The type of a procedure call (Request or Response).
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub enum ProcedureCallType {
     /// A request to execute a procedure
     Request,
@@ -256,13 +296,13 @@ pub trait ProcedureCallRequest:
             payload: event::Value::serialized(&self)?,
         })
     }
-    /// Checks if another procedure call matches this request.
+    /// Checks if another procedure call data matches the path and type of this request.
     ///
     /// # Arguments
-    /// * `other` - The procedure call to check against
+    /// * `other` - The procedure call data to check against
     ///
     /// # Returns
-    /// `true` if the procedure calls match, `false` otherwise
+    /// `true` if the path and type match, `false` otherwise
     fn match_self(other: &ProcedureCallData) -> bool {
         other.path == Self::path() && other.r#type == ProcedureCallType::Request
     }
@@ -291,6 +331,14 @@ pub trait ProcedureCallResponse:
             payload: event::Value::serialized(&self)?,
         })
     }
+    /// Checks if another procedure call data matches the path, type, and echo of this response.
+    ///
+    /// # Arguments
+    /// * `other` - The procedure call data to check against
+    /// * `echo` - The expected echo identifier
+    ///
+    /// # Returns
+    /// `true` if the path, type, and echo match, `false` otherwise
     fn match_echo(other: &ProcedureCallData, echo: u64) -> bool {
         other.path == Self::path()
             && other.r#type == ProcedureCallType::Response
@@ -303,7 +351,7 @@ pub trait ProcedureCallResponse:
 /// request or response in a procedure call system. It includes the path
 /// identifier, echo value for matching requests and responses, the type
 /// of call (request or response), and the serialized data payload.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ProcedureCallData {
     /// The path identifier for the procedure being called
     pub path: String,
@@ -318,15 +366,15 @@ pub struct ProcedureCallData {
 impl From<ProcedureCallData> for EventData {
     /// Converts a ProcedureCallData into an EventData.
     ///
-    /// This implementation:
-    /// 1. Encodes the procedure call information into the event string
-    /// 2. Preserves the data payload
+    /// This implementation encodes the procedure call information (path, echo, type)
+    /// into the `tag` field of the `EventData` using a specific format,
+    /// and places the payload directly into the `payload` field.
     ///
     /// # Arguments
     /// * `value` - The ProcedureCallData to convert
     ///
     /// # Returns
-    /// An EventData instance containing the encoded procedure call
+    /// An EventData instance representing the procedure call
     fn from(value: ProcedureCallData) -> Self {
         EventData {
             tag: encode_procedure_call(&value.path, value.echo, value.r#type),
@@ -338,21 +386,18 @@ impl From<ProcedureCallData> for EventData {
 impl Event for ProcedureCallData {
     /// Converts this procedure call into an EventData.
     ///
-    /// This implementation:
-    /// 1. Clones the current instance
-    /// 2. Converts it to EventData using the From implementation
-    ///
     /// # Returns
-    /// * `Ok(EventData)` - The converted event data
-    /// * `Err(CborValueError)` - If serialization fails
+    /// * `Ok(EventData)` - The converted event data.
+    /// * `Err(CborValueError)` - This implementation currently always returns `Ok`.
+    ///                          (Error handling is done during `ProcedureCallData` creation).
     fn upcast(&self) -> Result<EventData, CborValueError> {
         Ok(self.clone().into())
     }
 
-    /// The tag used to identify procedure call events in the event system
+    /// The tag prefix used to identify procedure call events in the event system.
     const TAG: &'static str = "internal.ProcedureCall";
 
-    /// The selector used to identify procedure call events
+    /// The selector used to identify procedure call events based on the tag prefix.
     const SELECTOR: crate::event::Selector =
         crate::event::Selector(|e| e.tag.starts_with(Self::TAG));
 }
@@ -362,16 +407,15 @@ impl TryFrom<&EventData> for ProcedureCallData {
 
     /// Attempts to convert an EventData into a ProcedureCallData.
     ///
-    /// This implementation:
-    /// 1. Decodes the procedure call information from the event string
-    /// 2. Preserves the data payload
+    /// This requires the `EventData` tag to start with `ProcedureCallData::TAG`
+    /// and follow the format produced by `encode_procedure_call`.
     ///
     /// # Arguments
     /// * `value` - The event data to convert
     ///
     /// # Returns
     /// * `Ok(ProcedureCallData)` - The converted procedure call data
-    /// * `Err(TryFromEventError)` - If the conversion fails
+    /// * `Err(TryFromEventError)` - If the tag format is invalid or does not match.
     fn try_from(value: &EventData) -> Result<Self, Self::Error> {
         let (path, echo, r#type) = decode_procedure_call(&value.tag)?;
         Ok(ProcedureCallData {
@@ -382,18 +426,24 @@ impl TryFrom<&EventData> for ProcedureCallData {
         })
     }
 }
-/// A trait providing extension methods for procedure calls.
+/// A trait providing extension methods for procedure calls on `State`.
 ///
 /// This trait adds convenient methods for making procedure calls and
-/// handling responses.
+/// handling responses using a `State` instance.
 pub trait ProcedureCallExt {
     /// Makes a procedure call and waits for the response.
+    ///
+    /// # Type Parameters
+    /// * `P` - The type of the procedure request, must implement `ProcedureCallRequest`.
     ///
     /// # Arguments
     /// * `procedure` - The procedure request to execute
     ///
     /// # Returns
-    /// A future that resolves to the procedure response or an error
+    /// A future that resolves to:
+    /// * `Ok(P::RESPONSE)` - The corresponding procedure response.
+    /// * `Err(CallSubscribeError)` - If there's an error during the call process
+    ///                              (e.g., serialization, emission, waiting for response).
     fn call<P>(
         &self,
         procedure: &P,
@@ -401,14 +451,19 @@ pub trait ProcedureCallExt {
     where
         P: ProcedureCallRequest;
 
-    /// Resolves a procedure call with a response.
+    /// Resolves a procedure call by sending a response.
+    ///
+    /// # Type Parameters
+    /// * `P` - The type of the *original* procedure request. Used to infer the response type path.
     ///
     /// # Arguments
-    /// * `echo` - The echo identifier of the original request
-    /// * `response` - The response to send
+    /// * `echo` - The echo identifier from the original request to match the response with.
+    /// * `response` - The response to send. Must be the `P::RESPONSE` type.
     ///
     /// # Returns
-    /// A future that resolves when the response is sent or an error occurs
+    /// A future that resolves to:
+    /// * `Ok(())` - If the response was successfully sent.
+    /// * `Err(CallSubscribeError)` - If there was an error serializing or emitting the response.
     fn resolve<P>(
         &self,
         echo: u64,
@@ -425,10 +480,12 @@ where
     /// Makes a procedure call and waits for the response.
     ///
     /// This implementation:
-    /// 1. Generates a new echo identifier
-    /// 2. Sends the request
-    /// 3. Waits for a matching response
-    /// 4. Returns the response or an error
+    /// 1. Generates a unique echo identifier using `T::next_echo`.
+    /// 2. Upcasts the request `procedure` to `ProcedureCallData`.
+    /// 3. Starts waiting for a response event matching the echo and response type.
+    /// 4. Emits the request event using the `wright`.
+    /// 5. Awaits the response future.
+    /// 6. Attempts to downcast the received `ProcedureCallData` to `P::RESPONSE`.
     async fn call<P>(&self, procedure: &P) -> Result<P::RESPONSE, CallSubscribeError>
     where
         P: ProcedureCallRequest,
@@ -436,21 +493,19 @@ where
         let echo = self.state.next_echo().await;
         let request = procedure.upcast(echo)?;
         let response = self
-            .wait_next_with(move |e| {
-                let mut matched = false;
-                if ProcedureCallData::SELECTOR.0(e) {
+            .wait_next(move |e| {
+                if ProcedureCallData::SELECTOR.match_event(&e) {
                     if let Ok(data) = ProcedureCallData::try_from(e) {
                         if P::RESPONSE::match_echo(&data, echo) {
-                            matched = true;
+                            return Some(data);
                         }
                     }
                 }
-                matched
+                None
             })
             .await;
         self.wright.emit(&request)?;
         let response = response.await?;
-        let response = ProcedureCallData::try_from(&response)?;
         Ok(P::RESPONSE::try_from(response)?)
     }
     /// Resolves a procedure call with a response.
@@ -458,11 +513,7 @@ where
     /// This implementation:
     /// 1. Converts the response to ProcedureCallData
     /// 2. Sends it through the bus
-    async fn resolve<P>(
-        &self,
-        echo: u64,
-        response: &P::RESPONSE,
-    ) -> Result<(), CallSubscribeError>
+    async fn resolve<P>(&self, echo: u64, response: &P::RESPONSE) -> Result<(), CallSubscribeError>
     where
         P: ProcedureCallRequest,
     {

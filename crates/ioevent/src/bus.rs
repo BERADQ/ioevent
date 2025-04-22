@@ -30,7 +30,11 @@
 //!
 //! For more detailed examples and usage patterns, see the individual component documentation.
 
-use std::{mem, pin::Pin, task::{Context, Poll}};
+use std::{
+    mem,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use crate::state::State;
 use channels::{
