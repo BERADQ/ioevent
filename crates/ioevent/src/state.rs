@@ -118,6 +118,9 @@ impl EventShooter {
     /// * `None` - If the event was emitted and the shooter was consumed.
     /// * `Some(self)` - If the event was not emitted (the selector didn't match).
     pub fn try_dispatch(self, event: &EventData) -> Option<Self> {
+        if self.shooter.is_closed() {
+            return None;
+        }
         let event = (self.selector)(event);
         match event {
             Some(event) => {

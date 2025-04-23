@@ -31,7 +31,7 @@
 //! For more detailed examples and usage patterns, see the individual component documentation.
 
 use std::{
-    iter, mem,
+    mem,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -239,8 +239,12 @@ where
         }
         let queue = ArrayQueue::new(self.err_queue.len());
         while let Some(err) = self.err_queue.pop() {
-            let _ = queue.push(err);
+            let e = queue.push(err);
             if queue.is_full() {
+                break;
+            }
+            if let Err(e) = e {
+                self.err_queue.push(e);
                 break;
             }
         }
