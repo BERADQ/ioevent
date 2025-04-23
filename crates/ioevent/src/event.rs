@@ -33,9 +33,9 @@ use std::{convert::Infallible, ops::Deref};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    state::State,
     error::{CallSubscribeError, CborValueError, TryFromEventError},
     future::SubscribeFutureRet,
+    state::State,
 };
 
 pub use ciborium::Value;
@@ -143,6 +143,19 @@ type InnerSubscribers<T> = Subscriber<T>;
 pub struct Subscribers<T>(pub &'static [InnerSubscribers<T>])
 where
     T: 'static;
+
+impl<T> Clone for Subscribers<T> {
+    fn clone(&self) -> Self {
+        Subscribers(self.0)
+    }
+}
+
+impl<T> Copy for Subscriber<T> {}
+impl<T> Clone for Subscriber<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
 
 impl<T> Subscribers<T>
 where

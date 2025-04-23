@@ -29,7 +29,8 @@
 //!
 //! For more detailed examples and usage patterns, see the individual component documentation.
 
-use std::{collections::HashMap, hash::Hash, ops::Deref, sync::Arc};
+use std::{collections::HashMap, hash::Hash, ops::Deref};
+use triomphe::Arc;
 
 use futures::FutureExt;
 use rand::{RngCore, SeedableRng, rngs::SmallRng};

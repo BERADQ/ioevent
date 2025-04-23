@@ -31,7 +31,7 @@
 //! For more detailed examples and usage patterns, see the individual component documentation.
 
 use std::{
-    mem,
+    iter, mem,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -41,6 +41,7 @@ use channels::{
     io::{AsyncRead, AsyncWrite, IntoRead, IntoWrite},
     serdes::Cbor,
 };
+use crossbeam_queue::{ArrayQueue, SegQueue};
 use futures::future::{self, join_all, pending};
 use tokio::{
     select,
@@ -48,6 +49,7 @@ use tokio::{
     task::{self, JoinHandle},
 };
 use tokio_util::sync::CancellationToken;
+use triomphe::Arc;
 
 use crate::{
     error::{BusError, BusSendError, CallSubscribeError},
@@ -80,9 +82,29 @@ impl<R> CenterTicker<R>
 where
     R: AsyncRead + Unpin,
 {
+    /// Creates a new CenterTicker with the specified receivers.
+    ///
+    /// # Arguments
+    /// * `rx` - A collection of event receivers
     pub fn new(rx: Vec<channels::Receiver<EventData, R, Cbor>>) -> Self {
         Self { rx, tx: Vec::new() }
     }
+
+    /// Processes events from all receivers and distributes them to all senders.
+    ///
+    /// This method performs the following operations:
+    /// 1. Waits for an event from any of the registered receivers
+    /// 2. Sends the event to all registered senders in parallel
+    /// 3. Collects and returns any errors that occurred during sending
+    ///
+    /// # Returns
+    /// A CenterErrorIter that yields:
+    /// * Left variant: Errors from sending events through channels
+    /// * Right variant: Errors from receiving events from channels
+    ///
+    /// # Cancel Safety
+    /// This method is cancel-safe, meaning it can be safely cancelled at any point without
+    /// leaving the system in an inconsistent state.
     pub async fn tick(
         &mut self,
     ) -> CenterErrorIter<impl Iterator<Item = tokio::sync::mpsc::error::SendError<EventData>>, R>
@@ -105,6 +127,15 @@ where
             Err(e) => CenterErrorIter::Right(Some(e.into())),
         }
     }
+
+    /// Creates a new receiver for events from this ticker.
+    ///
+    /// This method creates a new channel and adds its sender to the internal
+    /// collection of senders. The returned receiver can be used to receive
+    /// events that are processed by this ticker.
+    ///
+    /// # Returns
+    /// A new receiver for events from this ticker
     pub fn new_receiver(&mut self) -> tokio::sync::mpsc::UnboundedReceiver<EventData> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         self.tx.push(tx);
@@ -135,11 +166,13 @@ pub struct SubscribeTicker<T: 'static> {
     pub subs: Subscribers<T>,
     /// Collection of event receivers
     pub rx: tokio::sync::mpsc::UnboundedReceiver<EventData>,
+    /// Queue of errors that occurred during event distribution
+    pub err_queue: Arc<SegQueue<CallSubscribeError>>,
 }
 
 impl<T> SubscribeTicker<T>
 where
-    T: Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
 {
     /// Receives and distributes events to subscribers.
     ///
@@ -169,26 +202,88 @@ where
         .into_iter()
         .flatten()
     }
+
+    /// Attempts to process events without blocking.
+    ///
+    /// This method performs the following operations:
+    /// 1. Attempts to receive an event from the receiver without blocking
+    /// 2. If an event is received, spawns a task to process it asynchronously
+    /// 3. Collects any errors that occurred during processing
+    ///
+    /// # Arguments
+    /// * `state` - The current state
+    ///
+    /// # Returns
+    /// An iterator over any errors that occurred during event processing.
+    /// The iterator will be empty if no event was received or if all processing
+    /// was successful.
+    ///
+    /// # Cancel Safety
+    /// This method is cancel-safe, meaning it can be safely cancelled at any point without
+    /// leaving the system in an inconsistent state.
     pub async fn try_tick(
         &mut self,
         state: &State<T>,
     ) -> impl Iterator<Item = CallSubscribeError> + Send + 'static {
         let event = self.rx.try_recv();
         if let Ok(event) = event {
-            let results = self.subs.emit(state, &event).await;
-            Some(results)
-        } else {
-            None
+            let subs = self.subs.clone();
+            let state = state.clone();
+            let err_queue = self.err_queue.clone();
+            tokio::spawn(UnsafeSendFuture(async move {
+                let results = subs.emit(&state, &event).await;
+                for result in results {
+                    err_queue.push(result);
+                }
+            }));
         }
-        .into_iter()
-        .flatten()
+        let queue = ArrayQueue::new(self.err_queue.len());
+        while let Some(err) = self.err_queue.pop() {
+            let _ = queue.push(err);
+            if queue.is_full() {
+                break;
+            }
+        }
+        queue.into_iter()
     }
 }
 
+/// A ticker that manages event distribution to event shooters.
+///
+/// This component is responsible for:
+/// - Receiving events from the event bus
+/// - Distributing events to matching event shooters
+/// - Managing event shooter lifecycle
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// let mut shooter_ticker = ShooterTicker {
+///     rx: receiver,
+/// };
+///
+/// shooter_ticker.tick(&state).await;
+/// ```
 pub struct ShooterTicker {
+    /// Receiver for events from the event bus
     pub rx: tokio::sync::mpsc::UnboundedReceiver<EventData>,
 }
+
 impl ShooterTicker {
+    /// Processes events and distributes them to matching event shooters.
+    ///
+    /// This method performs the following operations:
+    /// 1. Receives an event from the event bus
+    /// 2. Attempts to dispatch the event to all registered event shooters
+    /// 3. Maintains shooters that did not match the event for future processing
+    ///
+    /// # Arguments
+    /// * `state` - The current state containing the event shooters
+    ///
+    /// # Cancel Safety
+    /// This method is cancel-safe, meaning it can be safely cancelled at any point without
+    /// leaving the system in an inconsistent state.
     pub async fn tick<T>(&mut self, state: &State<T>) {
         let event = self.rx.recv().await;
         if let Some(event) = event {
@@ -344,6 +439,27 @@ where
     W: AsyncWrite + Unpin + 'static,
     R: AsyncRead + Unpin + 'static,
 {
+    /// Runs the event bus with the specified state and error handler.
+    ///
+    /// This method performs the following operations:
+    /// 1. Initializes all components of the event bus
+    /// 2. Spawns tasks for processing events in parallel
+    /// 3. Handles errors using the provided error handler
+    /// 4. Provides a way to gracefully shut down the bus
+    ///
+    /// # Arguments
+    /// * `state` - The initial state for the event bus
+    /// * `handle_error` - A function that handles any errors that occur during event processing
+    ///
+    /// # Returns
+    /// A CloseHandle that can be used to:
+    /// * Gracefully shut down the bus
+    /// * Wait for the bus to complete
+    /// * Spawn the bus in a new task
+    ///
+    /// # Cancel Safety
+    /// This method is cancel-safe, meaning it can be safely cancelled at any point without
+    /// leaving the system in an inconsistent state.
     pub async fn run<F>(
         self,
         state: State<T>,
@@ -390,7 +506,7 @@ where
                         errors.map(|e| e.into()).for_each(handle_error);
                     }
                     errors = center_ticker.tick() => {
-                        errors.map(|e|e.into()).for_each(handle_error);
+                        errors.map(|e| e.into()).for_each(handle_error);
                     }
                     _ = close_signal_receiver.recv() => {
                         token.cancel();
@@ -408,31 +524,87 @@ where
     }
 }
 
+/// A signal for closing the event bus.
+///
+/// This struct provides a way to send a close signal to the event bus,
+/// which will gracefully shut down all components.
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// let close_signal = CloseSignal(sender);
+/// close_signal.close();
+/// ```
 pub struct CloseSignal(broadcast::Sender<()>);
+
 impl CloseSignal {
+    /// Sends a close signal to the event bus.
+    ///
+    /// This method sends a signal to all components of the event bus,
+    /// instructing them to shut down gracefully.
     pub fn close(self) {
         self.0.send(()).unwrap();
     }
 }
 
+/// A handle for managing the lifecycle of the event bus.
+///
+/// This struct combines a close signal with a future that represents
+/// the running event bus. It provides methods for gracefully shutting
+/// down the bus and waiting for it to complete.
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// let handle = CloseHandle {
+///     close_signal,
+///     future,
+/// };
+///
+/// // Gracefully shut down the bus
+/// handle.close().await;
+/// ```
 pub struct CloseHandle<F>
 where
     F: Future<Output = ()>,
 {
+    /// Signal for closing the event bus
     pub close_signal: CloseSignal,
+    /// Future representing the running event bus
     pub future: F,
 }
+
 impl<F> CloseHandle<F>
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    /// Gracefully shuts down the event bus and waits for it to complete.
+    ///
+    /// This method:
+    /// 1. Sends a close signal to all components
+    /// 2. Waits for the event bus to complete its shutdown
     pub async fn close(self) {
         self.close_signal.close();
         self.future.await;
     }
+
+    /// Waits for the event bus to complete without sending a close signal.
+    ///
+    /// This method is useful when you want to wait for the bus to complete
+    /// naturally, without forcing a shutdown.
     pub async fn join(self) {
-        self.future.await
+        self.future.await;
     }
+
+    /// Spawns the event bus in a new task and returns a handle to it.
+    ///
+    /// This method:
+    /// 1. Spawns the event bus future in a new task
+    /// 2. Returns a tuple containing:
+    ///    - A handle to the spawned task
+    ///    - The close signal for shutting down the bus
     pub fn spawn(self) -> (JoinHandle<()>, CloseSignal) {
         (tokio::spawn(self.future), self.close_signal)
     }
@@ -496,6 +668,16 @@ impl TryFrom<tokio::process::Command>
 /// This builder provides a fluent interface for setting up all the components
 /// needed for a fully functional Bus. It allows for incremental configuration
 /// of readers, writers, and subscribers.
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// let mut builder = BusBuilder::new(subscribers);
+/// builder.add_reader(stdin);
+/// builder.add_writer(stdout);
+/// let (bus, effect_wright) = builder.build();
+/// ```
 pub struct BusBuilder<T, W, R>
 where
     T: 'static + Send + Sync,
@@ -534,6 +716,7 @@ where
             state_tx,
         }
     }
+
     /// Adds a reader to the bus configuration.
     ///
     /// # Arguments
@@ -552,6 +735,7 @@ where
         self.rx.push(rx);
         self
     }
+
     /// Adds a writer to the bus configuration.
     ///
     /// # Arguments
@@ -570,6 +754,7 @@ where
         self.tx.push(rx);
         self
     }
+
     /// Adds a reader-writer pair to the bus configuration.
     ///
     /// # Arguments
@@ -587,10 +772,13 @@ where
         self.add_sender(writer);
         self
     }
+
     /// Builds and returns a configured Bus instance.
     ///
     /// # Returns
-    /// A fully configured Bus instance ready for use
+    /// A tuple containing:
+    /// * A fully configured Bus instance ready for use
+    /// * An EffectWright instance for emitting events
     pub fn build(self) -> (Bus<T, W, R>, EffectWright) {
         let mut center_ticker = CenterTicker::new(self.rx);
         let rx1 = center_ticker.new_receiver();
@@ -602,6 +790,7 @@ where
                 subscribe_ticker: SubscribeTicker {
                     subs: self.subs,
                     rx: rx1,
+                    err_queue: Arc::new(SegQueue::new()),
                 },
                 effect_ticker: EffectTicker {
                     tx: self.tx,
@@ -614,6 +803,26 @@ where
         )
     }
 }
+
+/// A wrapper for futures that can be safely sent between threads.
+///
+/// This struct provides a way to send futures between threads by implementing
+/// the `Send` trait for any future type. It is marked as unsafe because the
+/// implementation assumes the inner future can be safely sent between threads.
+///
+/// # Safety
+/// The caller must ensure that the inner future can be safely sent between threads.
+/// This is typically used when the future is known to be safe to send, but the
+/// compiler cannot verify this automatically.
+///
+/// # Examples
+/// ```rust
+/// use ioevent::prelude::*;
+///
+/// let future = async { /* ... */ };
+/// let unsafe_future = UnsafeSendFuture(future);
+/// tokio::spawn(unsafe_future);
+/// ```
 struct UnsafeSendFuture<F: Future>(F);
 
 impl<F: Future> Future for UnsafeSendFuture<F> {
@@ -626,4 +835,3 @@ impl<F: Future> Future for UnsafeSendFuture<F> {
 }
 
 unsafe impl<F: Future> Send for UnsafeSendFuture<F> {}
-
