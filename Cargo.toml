@@ -8,8 +8,8 @@ edition = "2024"
 [workspace.dependencies]
 # Examples dependencies
 
-ioevent = { path = "crates/ioevent", version = "0.1.0-rc.2" }
-ioevent_macro = { path = "crates/ioevent_macro", version = "0.1.0-rc.2" }
+ioevent = { path = "crates/ioevent", version = "0.1.0-rc.3" }
+ioevent_macro = { path = "crates/ioevent_macro", version = "0.1.0-rc.3" }
 base-common = { path = "examples/base/common"}
 rpc-common = { path = "examples/rpc/common" }
 tokio = { version = "1.44.2", features = ["full"] }

@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "ioevent"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "channels",
  "ciborium",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "ioevent_macro"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 dependencies = [
  "quote",
  "syn",
@@ -564,9 +564,9 @@ dependencies = [
 
 [[package]]
 name = "signal-hook-registry"
-version = "1.4.2"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9e9e0b4211b72e7b8b6e85c807d36c212bdb33ea8587f7569562a84df5465b1"
+checksum = "9203b8055f63a2a00e2f593bb0510367fe707d7ff1e5c872de2f537b339e5410"
 dependencies = [
  "libc",
 ]
@@ -664,9 +664,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.14"
+version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b9590b93e6fcc1739458317cccd391ad3955e2bde8913edf6f95f9e65a8f034"
+checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
 dependencies = [
  "bytes",
  "futures-core",

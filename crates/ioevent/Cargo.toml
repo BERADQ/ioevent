@@ -1,6 +1,6 @@
 [package]
 name = "ioevent"
-version = "0.1.0-rc.2"
+version = "0.1.0-rc.3"
 edition.workspace = true
 license = "Unlicense"
 repository = "https://github.com/BERADQ/ioevent"
@@ -15,7 +15,7 @@ default = ["macros"]
 
 # Internal dependencies
 
-ioevent_macro = { version = "0.1.0-rc.2", optional = true, workspace = true }
+ioevent_macro = { version = "0.1.0-rc.3", optional = true, workspace = true }
 
 # External dependencies
 
