@@ -54,7 +54,7 @@ let (bus, effect_wright) = builder.build();
 
 // Run the bus
 let state = State::new(AppState {}, effect_wright);
-bus.run(state, &|error| { eprintln!("{:?}", error); }).await;
+bus.run(state, &|error| { eprintln!("{:?}", error); }).await.join().await;
 ```
 
 ## Procedure Call (RPC)
@@ -97,3 +97,17 @@ let response = state.call(&CallPrint("Hello".to_string())).await?;
 ## License
 
 This project is licensed under the Unlicense - see the [LICENSE](https://github.com/BERADQ/ioevent/blob/main/LICENSE) file for details.
+
+## Acknowledgments
+
+### [Channels](https://github.com/threadexio/channels-rs)
+
+[![Channels](https://raw.githubusercontent.com/threadexio/channels-rs/master/assets/logo.transparent.svg)](https://github.com/threadexio/channels-rs)
+
+Special thanks to the Channels project for providing inspiration through its elegant communication model implementation. The simplicity and effectiveness of its design greatly influenced the development of IOEVENT's core architecture.
+
+### [Tokio](https://github.com/tokio-rs/tokio)
+
+[![Tokio](https://tokio.rs/img/tokio-horizontal.svg)](https://github.com/tokio-rs/tokio)
+
+Built on top of Tokio, the robust asynchronous runtime for Rust. IOEVENT leverages Tokio's powerful async I/O capabilities and efficient task scheduler to deliver high-performance event processing.
